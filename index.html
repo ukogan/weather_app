@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Local Weather</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app" class="app">
+    <header class="app__header">
+      <div class="header__top-row">
+        <div class="header__location" id="location-name">Loading...</div>
+        <button class="header__settings" id="settings-button" aria-label="Open settings">
+          <span class="settings__icon"></span>
+        </button>
+      </div>
+      <div class="header__summary">
+        <div class="summary__temp" id="current-temp">--</div>
+        <div class="summary__details">
+          <div class="summary__condition" id="current-condition">Loading forecast</div>
+          <div class="summary__hi-lo" id="current-hi-lo">-- / --</div>
+        </div>
+      </div>
+    </header>
+
+    <main class="app__content">
+      <section class="panel panel--hourly">
+        <h2 class="panel__title">HOURLY FORECAST</h2>
+        <div class="hourly" id="hourly-forecast"></div>
+      </section>
+
+      <section class="panel panel--daily">
+        <h2 class="panel__title">10-DAY FORECAST</h2>
+        <div class="daily" id="daily-forecast"></div>
+      </section>
+
+      <section class="panel panel--details">
+        <h2 class="panel__title">DETAILS</h2>
+        <div class="details" id="details-grid"></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="settings-dialog" class="settings">
+    <form method="dialog" class="settings__form" id="settings-form">
+      <h2 class="settings__title">Change Forecast Source</h2>
+      <label class="settings__label" for="forecast-url">NWS DWML URL</label>
+      <textarea id="forecast-url" name="forecast-url" class="settings__input" rows="4" required></textarea>
+      <p class="settings__help">Paste an XML forecast URL from forecast.weather.gov for your location.</p>
+      <div class="settings__actions">
+        <button type="submit" class="button button--primary">Load Forecast</button>
+        <button type="reset" class="button button--ghost" value="cancel">Cancel</button>
+      </div>
+      <div class="settings__error" id="settings-error" role="alert"></div>
+    </form>
+  </dialog>
+
+  <template id="hourly-card-template">
+    <div class="hourly__card">
+      <div class="hourly__time"></div>
+      <div class="hourly__temp-bar-container">
+        <div class="hourly__temp-bar"></div>
+      </div>
+      <div class="hourly__temp"></div>
+    </div>
+  </template>
+
+  <template id="daily-row-template">
+    <div class="daily__row">
+      <div class="daily__day"></div>
+      <div class="daily__temp-range-container">
+        <div class="daily__temp-range"></div>
+      </div>
+      <div class="daily__temps">
+        <div class="daily__temp daily__temp--low"></div>
+        <div class="daily__temp daily__temp--high"></div>
+      </div>
+    </div>
+  </template>
+
+  <template id="detail-tile-template">
+    <div class="detail">
+      <div class="detail__label"></div>
+      <div class="detail__value"></div>
+    </div>
+  </template>
+
+  <script src="app.js?v=2" type="module"></script>
+</body>
+</html>
