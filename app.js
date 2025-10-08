@@ -1,4 +1,5 @@
 const DEFAULT_FORECAST_URL = 'https://forecast.weather.gov/MapClick.php?lat=37.4718&lon=-122.2695&unit=0&lg=english&FcstType=dwml';
+const DEFAULT_HOURLY_URL = 'https://forecast.weather.gov/MapClick.php?lat=37.4718&lon=-122.2695&unit=0&lg=english&FcstType=digitalDWML';
 const HOUR_FORMAT = new Intl.DateTimeFormat('en-US', { hour: 'numeric' });
 const DAY_FORMAT = new Intl.DateTimeFormat('en-US', { weekday: 'short' });
 const TEMP_MIN = -20;
@@ -69,6 +70,7 @@ async function loadForecast(url) {
   state.forecastUrl = url;
 
   try {
+    // Fetch main forecast (daily, current, details)
     const response = await fetch(url);
     if (!response.ok) {
       throw new Error(`Forecast request failed: ${response.status}`);
@@ -82,7 +84,30 @@ async function loadForecast(url) {
       throw new Error('Unable to parse forecast XML.');
     }
 
-    state.data = parseDwmlForecast(xml);
+    const data = parseDwmlForecast(xml);
+
+    // Extract lat/lon to fetch hourly data
+    const pointNode = xml.querySelector('location point');
+    const lat = pointNode?.getAttribute('latitude') || '37.4718';
+    const lon = pointNode?.getAttribute('longitude') || '-122.2695';
+
+    // Fetch hourly data
+    try {
+      const hourlyUrl = `https://forecast.weather.gov/MapClick.php?lat=${lat}&lon=${lon}&unit=0&lg=english&FcstType=digitalDWML`;
+      const hourlyResponse = await fetch(hourlyUrl);
+      if (hourlyResponse.ok) {
+        const hourlyXmlText = await hourlyResponse.text();
+        const hourlyXml = parser.parseFromString(hourlyXmlText, 'text/xml');
+        const hourlyTemps = extractHourlyTemperatures(hourlyXml);
+        if (hourlyTemps.length > 0) {
+          data.hourly = buildHourlyForecastFromTemps(hourlyTemps);
+        }
+      }
+    } catch (hourlyError) {
+      console.warn('Failed to fetch hourly data', hourlyError);
+    }
+
+    state.data = data;
     renderForecast();
   } catch (error) {
     console.error('Failed to load forecast', error);
@@ -91,7 +116,11 @@ async function loadForecast(url) {
 }
 
 function parseDwmlForecast(xml) {
-  const forecastNode = Array.from(xml.querySelectorAll('data')).find((node) => node.getAttribute('type') === 'forecast');
+  // Try to find forecast data node (dwml format) or just use first data node (digitalDWML format)
+  let forecastNode = Array.from(xml.querySelectorAll('data')).find((node) => node.getAttribute('type') === 'forecast');
+  if (!forecastNode) {
+    forecastNode = xml.querySelector('data');
+  }
   if (!forecastNode) {
     throw new Error('Forecast data missing in DWML response.');
   }
@@ -245,6 +274,37 @@ function buildHourlyForecast(periodForecast) {
   }));
 }
 
+function buildHourlyForecastFromTemps(hourlyTemps) {
+  return hourlyTemps.slice(0, 24).map((item, index) => ({
+    label: index === 0 ? 'Now' : HOUR_FORMAT.format(item.startTime),
+    temperature: item.value,
+    icon: null,
+    summary: null,
+    precipitationChance: item.precipitationChance,
+  }));
+}
+
+function extractHourlyTemperatures(xml) {
+  const dataNode = xml.querySelector('data');
+  if (!dataNode) return [];
+
+  const parameters = dataNode.querySelector('parameters');
+  if (!parameters) return [];
+
+  const timeLayouts = buildTimeLayoutMap(dataNode);
+  const temps = extractTemperatureSeries(parameters, 'hourly', timeLayouts);
+
+  // Also extract precipitation probabilities
+  const popNode = parameters.querySelector('probability-of-precipitation[type="floating"]');
+  const pops = popNode ? Array.from(popNode.querySelectorAll('value')).map(parseMaybeNumber) : [];
+
+  // Merge temps and precipitation
+  return temps.map((temp, index) => ({
+    ...temp,
+    precipitationChance: pops[index] ?? null
+  }));
+}
+
 function parseCurrentObservations(currentNode) {
   if (!currentNode) {
     return null;
@@ -360,6 +420,7 @@ function renderForecast() {
 function renderHourly(hourly) {
   elements.hourlyForecast.innerHTML = '';
   if (!hourly.length || !elements.hourlyTemplate) {
+    console.error('Hourly data missing or template not found');
     return;
   }
 
@@ -368,6 +429,8 @@ function renderHourly(hourly) {
   const minTemp = Math.min(...temps);
   const maxTemp = Math.max(...temps);
   const tempRange = maxTemp - minTemp || 1;
+
+  console.log('Hourly temps:', { minTemp, maxTemp, tempRange });
 
   const fragment = document.createDocumentFragment();
 
@@ -379,8 +442,14 @@ function renderHourly(hourly) {
     const tempBar = node.querySelector('.hourly__temp-bar');
     if (item.temperature != null) {
       const heightPercent = ((item.temperature - minTemp) / tempRange) * 100;
+      const color = getTemperatureColor(item.temperature);
       tempBar.style.height = `${Math.max(10, heightPercent)}%`;
-      tempBar.style.backgroundColor = getTemperatureColor(item.temperature);
+      tempBar.style.backgroundColor = color;
+    }
+
+    const precipEl = node.querySelector('.hourly__precip');
+    if (item.precipitationChance != null && item.precipitationChance > 0) {
+      precipEl.textContent = `${Math.round(item.precipitationChance)}%`;
     }
 
     fragment.appendChild(node);
@@ -395,11 +464,11 @@ function renderDaily(daily) {
     return;
   }
 
-  // Find global min/max across all days
+  // Find the actual min/max across the forecast period for positioning
   const allTemps = daily.flatMap(item => [item.high, item.low]).filter(t => t != null);
-  const globalMin = Math.min(...allTemps);
-  const globalMax = Math.max(...allTemps);
-  const globalRange = globalMax - globalMin || 1;
+  const forecastMin = Math.min(...allTemps);
+  const forecastMax = Math.max(...allTemps);
+  const forecastRange = forecastMax - forecastMin || 1;
 
   const fragment = document.createDocumentFragment();
 
@@ -411,14 +480,15 @@ function renderDaily(daily) {
 
     const rangeBar = row.querySelector('.daily__temp-range');
     if (item.low != null && item.high != null) {
-      // Calculate position and width based on global range
-      const leftPercent = ((item.low - globalMin) / globalRange) * 100;
-      const widthPercent = ((item.high - item.low) / globalRange) * 100;
+      // Position based on forecast range (so bars fill the width)
+      const leftPercent = ((item.low - forecastMin) / forecastRange) * 100;
+      const rightPercent = ((item.high - forecastMin) / forecastRange) * 100;
+      const widthPercent = rightPercent - leftPercent;
 
       rangeBar.style.left = `${leftPercent}%`;
       rangeBar.style.width = `${Math.max(2, widthPercent)}%`;
 
-      // Use gradient from low to high temp
+      // Colors based on absolute temperature scale
       const lowColor = getTemperatureColor(item.low);
       const highColor = getTemperatureColor(item.high);
       rangeBar.style.background = `linear-gradient(to right, ${lowColor}, ${highColor})`;

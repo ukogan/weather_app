@@ -176,6 +176,12 @@ body {
   font-weight: 500;
 }
 
+.hourly__precip {
+  font-size: 12px;
+  color: #64b5ff;
+  min-height: 16px;
+}
+
 .daily {
   display: flex;
   flex-direction: column;
