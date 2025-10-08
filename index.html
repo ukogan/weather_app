@@ -11,6 +11,15 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <!-- Loading Screen -->
+  <div id="loading-screen" class="screen loading-screen">
+    <div class="loading-screen__content">
+      <img src="rainbow.png" alt="Rainbow landscape" class="loading-screen__image" />
+      <h1 class="loading-screen__title">Weather with Privacy</h1>
+      <div class="loading-screen__spinner"></div>
+    </div>
+  </div>
+
   <!-- Forecast Screen -->
   <div id="forecast-screen" class="screen app">
     <header class="app__header">
@@ -112,6 +121,6 @@
   </template>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js?v=11" type="module"></script>
+  <script src="app.js?v=13" type="module"></script>
 </body>
 </html>

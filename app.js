@@ -8,9 +8,12 @@ const TEMP_MAX = 120;
 const state = {
   location: JSON.parse(localStorage.getItem('weather_location')) || { lat: DEFAULT_LAT, lon: DEFAULT_LON },
   data: null,
+  loadStartTime: Date.now(),
 };
 
 const elements = {
+  // Loading screen
+  loadingScreen: document.getElementById('loading-screen'),
   // Forecast screen
   forecastScreen: document.getElementById('forecast-screen'),
   locationName: document.getElementById('location-name'),
@@ -57,15 +60,21 @@ function setupNavigation() {
 }
 
 function showScreen(screenName) {
-  if (screenName === 'location') {
-    elements.forecastScreen.style.display = 'none';
+  // Hide all screens
+  elements.loadingScreen.style.display = 'none';
+  elements.forecastScreen.style.display = 'none';
+  elements.locationScreen.style.display = 'none';
+
+  // Show requested screen
+  if (screenName === 'loading') {
+    elements.loadingScreen.style.display = 'flex';
+  } else if (screenName === 'location') {
     elements.locationScreen.style.display = 'flex';
     if (!map) {
       initMap();
     }
   } else {
     elements.forecastScreen.style.display = 'block';
-    elements.locationScreen.style.display = 'none';
   }
 }
 
@@ -208,9 +217,29 @@ async function loadForecastForLocation(lat, lon) {
 
     state.data = data;
     renderForecast();
+
+    // Show loading screen for at least 3 seconds
+    const minLoadTime = 3000;
+    const loadEndTime = Date.now();
+    const loadDuration = loadEndTime - state.loadStartTime;
+    const remainingTime = Math.max(0, minLoadTime - loadDuration);
+
+    setTimeout(() => {
+      showScreen('forecast');
+    }, remainingTime);
   } catch (error) {
     console.error('Failed to load forecast', error);
     showError(error);
+
+    // Show loading screen for at least 3 seconds even on error
+    const minLoadTime = 3000;
+    const loadEndTime = Date.now();
+    const loadDuration = loadEndTime - state.loadStartTime;
+    const remainingTime = Math.max(0, minLoadTime - loadDuration);
+
+    setTimeout(() => {
+      showScreen('forecast');
+    }, remainingTime);
   }
 }
 
@@ -374,13 +403,21 @@ function buildHourlyForecast(periodForecast) {
 }
 
 function buildHourlyForecastFromTemps(hourlyTemps) {
-  return hourlyTemps.slice(0, 24).map((item, index) => ({
-    label: index === 0 ? 'Now' : HOUR_FORMAT.format(item.startTime),
-    temperature: item.value,
-    icon: null,
-    summary: null,
-    precipitationChance: item.precipitationChance,
-  }));
+  const now = new Date();
+
+  return hourlyTemps.slice(0, 24).map((item, index) => {
+    // Check if this period is current (within the hour)
+    const isCurrent = item.startTime &&
+      Math.abs(now - item.startTime) < 60 * 60 * 1000;
+
+    return {
+      label: isCurrent ? 'Now' : HOUR_FORMAT.format(item.startTime),
+      temperature: item.value,
+      icon: null,
+      summary: null,
+      precipitationChance: item.precipitationChance,
+    };
+  });
 }
 
 function extractHourlyTemperatures(xml) {
