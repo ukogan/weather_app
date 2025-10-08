@@ -11,39 +11,46 @@ const state = {
   loadStartTime: Date.now(),
 };
 
-const elements = {
-  // Loading screen
-  loadingScreen: document.getElementById('loading-screen'),
-  // Forecast screen
-  forecastScreen: document.getElementById('forecast-screen'),
-  locationName: document.getElementById('location-name'),
-  currentTemp: document.getElementById('current-temp'),
-  currentCondition: document.getElementById('current-condition'),
-  currentHiLo: document.getElementById('current-hi-lo'),
-  hourlyForecast: document.getElementById('hourly-forecast'),
-  dailyForecast: document.getElementById('daily-forecast'),
-  detailsGrid: document.getElementById('details-grid'),
-  settingsButton: document.getElementById('settings-button'),
-  hourlyTemplate: document.getElementById('hourly-card-template'),
-  dailyTemplate: document.getElementById('daily-row-template'),
-  detailTemplate: document.getElementById('detail-tile-template'),
-  // Location screen
-  locationScreen: document.getElementById('location-screen'),
-  backButton: document.getElementById('back-button'),
-  locationSearch: document.getElementById('location-search'),
-  geolocateButton: document.getElementById('geolocate-button'),
-  map: document.getElementById('map'),
-  selectedCoords: document.getElementById('selected-coords'),
-  confirmButton: document.getElementById('confirm-location'),
-};
-
+let elements = {};
 let map = null;
 let marker = null;
 let selectedLocation = null;
 
-init();
+// Wait for DOM to be ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
 
 function init() {
+  // Initialize DOM element references
+  elements = {
+    // Loading screen
+    loadingScreen: document.getElementById('loading-screen'),
+    // Forecast screen
+    forecastScreen: document.getElementById('forecast-screen'),
+    locationName: document.getElementById('location-name'),
+    currentTemp: document.getElementById('current-temp'),
+    currentCondition: document.getElementById('current-condition'),
+    currentHiLo: document.getElementById('current-hi-lo'),
+    hourlyForecast: document.getElementById('hourly-forecast'),
+    dailyForecast: document.getElementById('daily-forecast'),
+    detailsGrid: document.getElementById('details-grid'),
+    settingsButton: document.getElementById('settings-button'),
+    hourlyTemplate: document.getElementById('hourly-card-template'),
+    dailyTemplate: document.getElementById('daily-row-template'),
+    detailTemplate: document.getElementById('detail-tile-template'),
+    // Location screen
+    locationScreen: document.getElementById('location-screen'),
+    backButton: document.getElementById('back-button'),
+    locationSearch: document.getElementById('location-search'),
+    geolocateButton: document.getElementById('geolocate-button'),
+    map: document.getElementById('map'),
+    selectedCoords: document.getElementById('selected-coords'),
+    confirmButton: document.getElementById('confirm-location'),
+  };
+
   setupNavigation();
   setupLocationPicker();
   loadForecastForLocation(state.location.lat, state.location.lon);
