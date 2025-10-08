@@ -7,10 +7,12 @@
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png" />
   <link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div id="app" class="app">
+  <!-- Forecast Screen -->
+  <div id="forecast-screen" class="screen app">
     <header class="app__header">
       <div class="header__top-row">
         <div class="header__location" id="location-name">Loading...</div>
@@ -45,19 +47,38 @@
     </main>
   </div>
 
-  <dialog id="settings-dialog" class="settings">
-    <form method="dialog" class="settings__form" id="settings-form">
-      <h2 class="settings__title">Change Forecast Source</h2>
-      <label class="settings__label" for="forecast-url">NWS DWML URL</label>
-      <textarea id="forecast-url" name="forecast-url" class="settings__input" rows="4" required></textarea>
-      <p class="settings__help">Paste an XML forecast URL from forecast.weather.gov for your location.</p>
-      <div class="settings__actions">
-        <button type="submit" class="button button--primary">Load Forecast</button>
-        <button type="reset" class="button button--ghost" value="cancel">Cancel</button>
-      </div>
-      <div class="settings__error" id="settings-error" role="alert"></div>
-    </form>
-  </dialog>
+  </div>
+
+  <!-- Location Picker Screen -->
+  <div id="location-screen" class="screen location-picker" style="display: none;">
+    <div class="location-picker__header">
+      <button class="location-picker__back" id="back-button" aria-label="Back to forecast">
+        <span class="back-arrow">←</span>
+      </button>
+      <h1 class="location-picker__title">Choose Location</h1>
+    </div>
+
+    <div class="location-picker__search">
+      <input
+        type="search"
+        id="location-search"
+        class="location-search__input"
+        placeholder="Search US address or place..."
+      />
+      <button class="location-search__geolocate" id="geolocate-button" aria-label="Use my location">
+        <span class="geolocate-icon">📍</span>
+      </button>
+    </div>
+
+    <div id="map" class="location-picker__map"></div>
+
+    <div class="location-picker__info">
+      <div class="location-info__coords" id="selected-coords">Tap map to select location</div>
+      <button class="button button--primary location-picker__confirm" id="confirm-location" disabled>
+        Update Forecast
+      </button>
+    </div>
+  </div>
 
   <template id="hourly-card-template">
     <div class="hourly__card">
@@ -90,6 +111,7 @@
     </div>
   </template>
 
-  <script src="app.js?v=10" type="module"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="app.js?v=11" type="module"></script>
 </body>
 </html>

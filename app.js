@@ -1,16 +1,18 @@
-const DEFAULT_FORECAST_URL = 'https://forecast.weather.gov/MapClick.php?lat=37.4718&lon=-122.2695&unit=0&lg=english&FcstType=dwml';
-const DEFAULT_HOURLY_URL = 'https://forecast.weather.gov/MapClick.php?lat=37.4718&lon=-122.2695&unit=0&lg=english&FcstType=digitalDWML';
+const DEFAULT_LAT = 37.4718;
+const DEFAULT_LON = -122.2695;
 const HOUR_FORMAT = new Intl.DateTimeFormat('en-US', { hour: 'numeric' });
 const DAY_FORMAT = new Intl.DateTimeFormat('en-US', { weekday: 'short' });
 const TEMP_MIN = -20;
 const TEMP_MAX = 120;
 
 const state = {
-  forecastUrl: DEFAULT_FORECAST_URL,
+  location: JSON.parse(localStorage.getItem('weather_location')) || { lat: DEFAULT_LAT, lon: DEFAULT_LON },
   data: null,
 };
 
 const elements = {
+  // Forecast screen
+  forecastScreen: document.getElementById('forecast-screen'),
   locationName: document.getElementById('location-name'),
   currentTemp: document.getElementById('current-temp'),
   currentCondition: document.getElementById('current-condition'),
@@ -19,55 +21,157 @@ const elements = {
   dailyForecast: document.getElementById('daily-forecast'),
   detailsGrid: document.getElementById('details-grid'),
   settingsButton: document.getElementById('settings-button'),
-  settingsDialog: document.getElementById('settings-dialog'),
-  settingsForm: document.getElementById('settings-form'),
-  settingsInput: document.getElementById('forecast-url'),
-  settingsError: document.getElementById('settings-error'),
   hourlyTemplate: document.getElementById('hourly-card-template'),
   dailyTemplate: document.getElementById('daily-row-template'),
   detailTemplate: document.getElementById('detail-tile-template'),
+  // Location screen
+  locationScreen: document.getElementById('location-screen'),
+  backButton: document.getElementById('back-button'),
+  locationSearch: document.getElementById('location-search'),
+  geolocateButton: document.getElementById('geolocate-button'),
+  map: document.getElementById('map'),
+  selectedCoords: document.getElementById('selected-coords'),
+  confirmButton: document.getElementById('confirm-location'),
 };
+
+let map = null;
+let marker = null;
+let selectedLocation = null;
 
 init();
 
 function init() {
-  setupSettingsDialog();
-  loadForecast(DEFAULT_FORECAST_URL);
+  setupNavigation();
+  setupLocationPicker();
+  loadForecastForLocation(state.location.lat, state.location.lon);
 }
 
-function setupSettingsDialog() {
-  if (!elements.settingsDialog) {
-    return;
-  }
-
+function setupNavigation() {
   elements.settingsButton.addEventListener('click', () => {
-    elements.settingsInput.value = state.forecastUrl;
-    elements.settingsError.textContent = '';
-    elements.settingsDialog.showModal();
+    showScreen('location');
   });
 
-  elements.settingsForm.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const url = elements.settingsInput.value.trim();
+  elements.backButton.addEventListener('click', () => {
+    showScreen('forecast');
+  });
+}
 
-    if (!url) {
-      elements.settingsError.textContent = 'Please provide a forecast URL.';
+function showScreen(screenName) {
+  if (screenName === 'location') {
+    elements.forecastScreen.style.display = 'none';
+    elements.locationScreen.style.display = 'flex';
+    if (!map) {
+      initMap();
+    }
+  } else {
+    elements.forecastScreen.style.display = 'block';
+    elements.locationScreen.style.display = 'none';
+  }
+}
+
+function setupLocationPicker() {
+  // Geolocation button
+  elements.geolocateButton.addEventListener('click', async () => {
+    if (!navigator.geolocation) {
+      alert('Geolocation is not supported by your browser');
       return;
     }
 
-    elements.settingsError.textContent = '';
-    elements.settingsDialog.close();
-    await loadForecast(url);
+    elements.geolocateButton.disabled = true;
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const lat = position.coords.latitude;
+        const lon = position.coords.longitude;
+        setLocation(lat, lon);
+        map.setView([lat, lon], 10);
+        elements.geolocateButton.disabled = false;
+      },
+      (error) => {
+        console.error('Geolocation error:', error);
+        alert('Unable to get your location');
+        elements.geolocateButton.disabled = false;
+      }
+    );
   });
 
-  elements.settingsForm.addEventListener('reset', () => {
-    elements.settingsDialog.close();
-    elements.settingsError.textContent = '';
+  // Search input with debounce
+  let searchTimeout;
+  elements.locationSearch.addEventListener('input', (e) => {
+    clearTimeout(searchTimeout);
+    const query = e.target.value.trim();
+    if (query.length < 3) return;
+
+    searchTimeout = setTimeout(() => searchLocation(query), 500);
+  });
+
+  // Confirm button
+  elements.confirmButton.addEventListener('click', () => {
+    if (selectedLocation) {
+      state.location = selectedLocation;
+      localStorage.setItem('weather_location', JSON.stringify(selectedLocation));
+      loadForecastForLocation(selectedLocation.lat, selectedLocation.lon);
+      showScreen('forecast');
+    }
   });
 }
 
-async function loadForecast(url) {
-  state.forecastUrl = url;
+function initMap() {
+  map = L.map('map').setView([state.location.lat, state.location.lon], 10);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors',
+    maxZoom: 19,
+  }).addTo(map);
+
+  // Click to select location
+  map.on('click', (e) => {
+    setLocation(e.latlng.lat, e.latlng.lng);
+  });
+
+  // Set initial location
+  setLocation(state.location.lat, state.location.lon);
+}
+
+function setLocation(lat, lon) {
+  selectedLocation = { lat, lon };
+
+  // Update marker
+  if (marker) {
+    marker.setLatLng([lat, lon]);
+  } else {
+    marker = L.marker([lat, lon]).addTo(map);
+  }
+
+  // Update UI
+  elements.selectedCoords.textContent = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+  elements.confirmButton.disabled = false;
+}
+
+async function searchLocation(query) {
+  try {
+    const response = await fetch(
+      `https://nominatim.openstreetmap.org/search?` +
+      `q=${encodeURIComponent(query)}&` +
+      `countrycodes=us&` +
+      `format=json&` +
+      `limit=1`
+    );
+    const results = await response.json();
+
+    if (results.length > 0) {
+      const result = results[0];
+      const lat = parseFloat(result.lat);
+      const lon = parseFloat(result.lon);
+      setLocation(lat, lon);
+      map.setView([lat, lon], 10);
+    }
+  } catch (error) {
+    console.error('Search error:', error);
+  }
+}
+
+async function loadForecastForLocation(lat, lon) {
+  const url = `https://forecast.weather.gov/MapClick.php?lat=${lat}&lon=${lon}&unit=0&lg=english&FcstType=dwml`;
 
   try {
     // Fetch main forecast (daily, current, details)
@@ -85,11 +189,6 @@ async function loadForecast(url) {
     }
 
     const data = parseDwmlForecast(xml);
-
-    // Extract lat/lon to fetch hourly data
-    const pointNode = xml.querySelector('location point');
-    const lat = pointNode?.getAttribute('latitude') || '37.4718';
-    const lon = pointNode?.getAttribute('longitude') || '-122.2695';
 
     // Fetch hourly data
     try {
