@@ -261,7 +261,29 @@ function parseDwmlForecast(xml) {
   }
 
   const currentNode = Array.from(xml.querySelectorAll('data')).find((node) => node.getAttribute('type') === 'current observations');
-  const location = cleanText(forecastNode.querySelector('location > area-description')) ?? 'Unknown location';
+
+  // Extract location with multiple fallback strategies
+  let location = cleanText(forecastNode.querySelector('location > area-description'));
+
+  if (!location) {
+    // Try without child selector in case XML structure differs
+    location = cleanText(forecastNode.querySelector('area-description'));
+  }
+
+  if (!location) {
+    // Fallback to coordinates if area-description is missing
+    const point = forecastNode.querySelector('location > point');
+    if (point) {
+      const lat = point.getAttribute('latitude');
+      const lon = point.getAttribute('longitude');
+      location = `${lat}, ${lon}`;
+    }
+  }
+
+  if (!location) {
+    location = 'Unknown location';
+  }
+
   const issuedAt = cleanText(xml.querySelector('head > product > creation-date'));
   const timeLayouts = buildTimeLayoutMap(forecastNode);
   const parameters = forecastNode.querySelector('parameters');
