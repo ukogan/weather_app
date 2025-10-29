@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mockup 1: Comprehensive Timeline - 48 Hour Weather</title>
+  <style>
+    :root {
+      --background: #0e0b20;
+      --foreground: #f5f5f7;
+      --secondary: rgba(255, 255, 255, 0.72);
+      --panel-bg: rgba(28, 26, 45, 0.9);
+      --panel-border: rgba(255, 255, 255, 0.1);
+      --accent: #64b5ff;
+      --precip-color: #64b5ff;
+      font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: linear-gradient(180deg, #17132f 0%, #0e0b20 100%);
+      color: var(--foreground);
+      min-height: 100vh;
+      padding: 20px;
+      overflow-x: hidden;
+    }
+
+    .container {
+      max-width: 428px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      color: var(--secondary);
+      font-size: 14px;
+      margin-bottom: 24px;
+    }
+
+    /* Main Timeline Panel */
+    .timeline-panel {
+      background: var(--panel-bg);
+      backdrop-filter: blur(24px);
+      border: 1px solid var(--panel-border);
+      border-radius: 18px;
+      padding: 16px;
+      margin-bottom: 20px;
+    }
+
+    .panel-title {
+      font-size: 14px;
+      letter-spacing: 0.1em;
+      color: var(--secondary);
+      margin-bottom: 16px;
+    }
+
+    /* Timeline Container */
+    .timeline-container {
+      position: relative;
+      height: 320px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scroll-snap-type: x proximity;
+      -webkit-overflow-scrolling: touch;
+      cursor: grab;
+    }
+
+    .timeline-container:active {
+      cursor: grabbing;
+    }
+
+    .timeline-container::-webkit-scrollbar {
+      height: 6px;
+    }
+
+    .timeline-container::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 3px;
+    }
+
+    .timeline-container::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 3px;
+    }
+
+    .timeline-svg {
+      height: 100%;
+      min-width: 2400px; /* 48 hours * 50px per hour */
+    }
+
+    /* Legend */
+    .legend {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--secondary);
+    }
+
+    .legend-icon {
+      width: 16px;
+      height: 3px;
+      border-radius: 2px;
+    }
+
+    .legend-icon.temp { background: linear-gradient(90deg, #64b5ff, #ef5350); }
+    .legend-icon.precip { background: var(--precip-color); }
+    .legend-icon.wind { background: #9575cd; }
+
+    /* Quick Stats */
+    .quick-stats {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .stat-card {
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      padding: 12px;
+    }
+
+    .stat-label {
+      font-size: 11px;
+      color: var(--secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+    }
+
+    .stat-value {
+      font-size: 20px;
+      font-weight: 600;
+    }
+
+    /* Hourly Detail (shown on tap/click) */
+    .hour-detail {
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      padding: 16px;
+      position: fixed;
+      bottom: 20px;
+      left: 20px;
+      right: 20px;
+      max-width: 388px;
+      margin: 0 auto;
+      transform: translateY(120%);
+      transition: transform 0.3s ease;
+      z-index: 100;
+    }
+
+    .hour-detail.active {
+      transform: translateY(0);
+    }
+
+    .hour-detail-time {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+
+    .hour-detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .detail-item {
+      display: flex;
+      justify-content: space-between;
+      font-size: 14px;
+    }
+
+    .detail-label {
+      color: var(--secondary);
+    }
+
+    /* Touch hint */
+    .touch-hint {
+      text-align: center;
+      color: var(--secondary);
+      font-size: 12px;
+      margin-top: 12px;
+      opacity: 0.8;
+    }
+
+    /* UX Notes */
+    .ux-notes {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 16px;
+      margin-top: 20px;
+    }
+
+    .ux-notes h3 {
+      font-size: 14px;
+      margin-bottom: 8px;
+      color: var(--accent);
+    }
+
+    .ux-notes ul {
+      font-size: 13px;
+      color: var(--secondary);
+      line-height: 1.6;
+      padding-left: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>48-Hour Forecast</h1>
+    <p class="subtitle">San Carlos, CA • Comprehensive Timeline View</p>
+
+    <!-- Quick Stats -->
+    <div class="quick-stats">
+      <div class="stat-card">
+        <div class="stat-label">High / Low</div>
+        <div class="stat-value">72° / 54°</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Rain Chance</div>
+        <div class="stat-value">35%</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Peak Wind</div>
+        <div class="stat-value">15 mph</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Humidity</div>
+        <div class="stat-value">65-80%</div>
+      </div>
+    </div>
+
+    <!-- Main Timeline -->
+    <div class="timeline-panel">
+      <h2 class="panel-title">DETAILED TIMELINE</h2>
+
+      <div class="timeline-container" id="timeline">
+        <svg class="timeline-svg" viewBox="0 0 2400 320" preserveAspectRatio="none">
+          <!-- Grid Lines -->
+          <g id="grid"></g>
+
+          <!-- Cloud Coverage Background -->
+          <g id="clouds"></g>
+
+          <!-- Temperature Line -->
+          <g id="temperature"></g>
+
+          <!-- Precipitation Bars -->
+          <g id="precipitation"></g>
+
+          <!-- Wind Indicators -->
+          <g id="wind"></g>
+
+          <!-- Time Labels -->
+          <g id="labels"></g>
+
+          <!-- Interactive Overlay -->
+          <g id="interactive"></g>
+        </svg>
+      </div>
+
+      <div class="legend">
+        <div class="legend-item">
+          <div class="legend-icon temp"></div>
+          <span>Temperature</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-icon precip"></div>
+          <span>Precipitation %</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-icon wind"></div>
+          <span>Wind Speed</span>
+        </div>
+      </div>
+
+      <div class="touch-hint">← Swipe to scroll through time →</div>
+    </div>
+
+    <!-- Hour Detail Popup -->
+    <div class="hour-detail" id="hourDetail">
+      <div class="hour-detail-time" id="detailTime">--</div>
+      <div class="hour-detail-grid">
+        <div class="detail-item">
+          <span class="detail-label">Temperature</span>
+          <span id="detailTemp">--°</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Feels Like</span>
+          <span id="detailFeels">--°</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Precipitation</span>
+          <span id="detailPrecip">--%</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Wind</span>
+          <span id="detailWind">-- mph</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Humidity</span>
+          <span id="detailHumidity">--%</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Cloud Cover</span>
+          <span id="detailClouds">--%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- UX Notes -->
+    <div class="ux-notes">
+      <h3>UX Interaction Patterns</h3>
+      <ul>
+        <li><strong>Horizontal Scroll:</strong> Swipe or scroll to navigate through 48 hours</li>
+        <li><strong>Tap for Details:</strong> Touch any hour to see detailed metrics</li>
+        <li><strong>Visual Hierarchy:</strong> Temperature line is primary, precipitation bars secondary</li>
+        <li><strong>Cloud Coverage:</strong> Shown as subtle background opacity changes</li>
+        <li><strong>Wind Direction:</strong> Arrows show direction at 3-hour intervals</li>
+        <li><strong>Color Coding:</strong> Temperature uses gradient from cold (blue) to hot (red)</li>
+        <li><strong>Snap Points:</strong> Timeline snaps to 6-hour blocks for easier navigation</li>
+      </ul>
+    </div>
+  </div>
+
+  <script>
+    // Temperature color function matching the app
+    function getTemperatureColor(temp) {
+      const TEMP_MIN = -20;
+      const TEMP_MAX = 120;
+      const normalized = Math.max(0, Math.min(1, (temp - TEMP_MIN) / (TEMP_MAX - TEMP_MIN)));
+
+      const stops = [
+        { pos: 0.00, color: [255, 255, 255] },
+        { pos: 0.14, color: [147, 112, 219] },
+        { pos: 0.29, color: [100, 181, 246] },
+        { pos: 0.43, color: [102, 187, 106] },
+        { pos: 0.57, color: [255, 235, 59] },
+        { pos: 0.71, color: [239, 83, 80] },
+        { pos: 1.00, color: [136, 14, 79] }
+      ];
+
+      let lower = stops[0];
+      let upper = stops[stops.length - 1];
+
+      for (let i = 0; i < stops.length - 1; i++) {
+        if (normalized >= stops[i].pos && normalized <= stops[i + 1].pos) {
+          lower = stops[i];
+          upper = stops[i + 1];
+          break;
+        }
+      }
+
+      const range = upper.pos - lower.pos;
+      const factor = range === 0 ? 0 : (normalized - lower.pos) / range;
+
+      const r = Math.round(lower.color[0] + (upper.color[0] - lower.color[0]) * factor);
+      const g = Math.round(lower.color[1] + (upper.color[1] - lower.color[1]) * factor);
+      const b = Math.round(lower.color[2] + (upper.color[2] - lower.color[2]) * factor);
+
+      return `rgb(${r}, ${g}, ${b})`;
+    }
+
+    // Generate sample data for 48 hours
+    function generateWeatherData() {
+      const data = [];
+      const baseTime = new Date();
+      baseTime.setMinutes(0, 0, 0);
+
+      for (let i = 0; i < 48; i++) {
+        const time = new Date(baseTime.getTime() + i * 3600000);
+        const hour = time.getHours();
+
+        // Realistic temperature curve (cooler at night)
+        const dayProgress = (hour - 6) / 12;
+        const tempBase = 60 + Math.sin(dayProgress * Math.PI) * 12;
+        const temp = tempBase + (Math.random() - 0.5) * 8;
+
+        // Higher precipitation chance in early morning
+        const precipBase = hour >= 4 && hour <= 8 ? 40 : 15;
+        const precip = Math.max(0, Math.min(100, precipBase + (Math.random() - 0.5) * 30));
+
+        // Wind varies throughout day
+        const windSpeed = 5 + Math.random() * 15;
+        const windDir = Math.floor(Math.random() * 360);
+
+        // Cloud coverage
+        const clouds = Math.max(0, Math.min(100, 30 + (Math.random() - 0.5) * 40));
+
+        // Humidity higher at night
+        const humidity = hour >= 20 || hour <= 6 ? 75 : 55;
+
+        data.push({
+          time,
+          temp: Math.round(temp),
+          feelsLike: Math.round(temp + (Math.random() - 0.5) * 5),
+          precip: Math.round(precip),
+          windSpeed: Math.round(windSpeed),
+          windDir,
+          clouds: Math.round(clouds),
+          humidity: humidity + Math.round((Math.random() - 0.5) * 10),
+          dewPoint: Math.round(temp - 15)
+        });
+      }
+
+      return data;
+    }
+
+    // Render the timeline
+    function renderTimeline() {
+      const data = generateWeatherData();
+      const svg = document.querySelector('.timeline-svg');
+      const width = 2400;
+      const height = 320;
+      const padding = 40;
+
+      // Clear previous content
+      document.getElementById('grid').innerHTML = '';
+      document.getElementById('clouds').innerHTML = '';
+      document.getElementById('temperature').innerHTML = '';
+      document.getElementById('precipitation').innerHTML = '';
+      document.getElementById('wind').innerHTML = '';
+      document.getElementById('labels').innerHTML = '';
+      document.getElementById('interactive').innerHTML = '';
+
+      // Grid lines every 6 hours
+      for (let i = 0; i < 48; i += 6) {
+        const x = (i / 48) * width;
+        const line = `<line x1="${x}" y1="0" x2="${x}" y2="${height - padding}"
+                      stroke="rgba(255,255,255,0.05)" stroke-width="1"/>`;
+        document.getElementById('grid').innerHTML += line;
+      }
+
+      // Cloud coverage as background
+      let cloudPath = `M 0,${height - padding} `;
+      data.forEach((d, i) => {
+        const x = (i / 47) * width;
+        const y = height - padding - (d.clouds / 100) * (height - padding * 2);
+        cloudPath += `L ${x},${y} `;
+      });
+      cloudPath += `L ${width},${height - padding} Z`;
+      document.getElementById('clouds').innerHTML =
+        `<path d="${cloudPath}" fill="rgba(255,255,255,0.03)"/>`;
+
+      // Temperature line with gradient fill
+      let tempPath = '';
+      let tempFillPath = `M 0,${height - padding} `;
+      const tempMin = Math.min(...data.map(d => d.temp));
+      const tempMax = Math.max(...data.map(d => d.temp));
+
+      data.forEach((d, i) => {
+        const x = (i / 47) * width;
+        const y = height - padding - ((d.temp - tempMin) / (tempMax - tempMin)) * (height - padding * 2 - 80);
+
+        if (i === 0) {
+          tempPath = `M ${x},${y}`;
+          tempFillPath += `L ${x},${y}`;
+        } else {
+          tempPath += ` L ${x},${y}`;
+          tempFillPath += ` L ${x},${y}`;
+        }
+
+        // Add circle point
+        const circle = `<circle cx="${x}" cy="${y}" r="3"
+                       fill="${getTemperatureColor(d.temp)}"
+                       stroke="rgba(255,255,255,0.3)" stroke-width="1"
+                       data-hour="${i}" class="temp-point"/>`;
+        document.getElementById('temperature').innerHTML += circle;
+      });
+
+      tempFillPath += ` L ${width},${height - padding} Z`;
+
+      // Create gradient for temperature line
+      const gradientId = 'tempGradient';
+      const gradientDef = `
+        <defs>
+          <linearGradient id="${gradientId}" x1="0%" y1="0%" x2="100%" y2="0%">
+            ${data.map((d, i) =>
+              `<stop offset="${(i / 47) * 100}%" stop-color="${getTemperatureColor(d.temp)}"/>`
+            ).join('')}
+          </linearGradient>
+        </defs>
+      `;
+
+      document.getElementById('temperature').innerHTML = gradientDef +
+        `<path d="${tempFillPath}" fill="url(#${gradientId})" opacity="0.2"/>` +
+        `<path d="${tempPath}" stroke="url(#${gradientId})" stroke-width="3" fill="none"/>` +
+        document.getElementById('temperature').innerHTML;
+
+      // Precipitation bars
+      data.forEach((d, i) => {
+        if (d.precip > 0) {
+          const x = (i / 47) * width - 8;
+          const barHeight = (d.precip / 100) * 60;
+          const y = height - padding - barHeight;
+
+          const bar = `<rect x="${x}" y="${y}" width="16" height="${barHeight}"
+                       fill="${'#64b5ff'}" opacity="0.6" rx="2"
+                       data-hour="${i}" class="precip-bar"/>`;
+          document.getElementById('precipitation').innerHTML += bar;
+
+          // Add percentage label for significant precipitation
+          if (d.precip > 20) {
+            const text = `<text x="${x + 8}" y="${y - 5}"
+                         font-size="10" fill="${'#64b5ff'}" text-anchor="middle">
+                         ${d.precip}%</text>`;
+            document.getElementById('precipitation').innerHTML += text;
+          }
+        }
+      });
+
+      // Wind indicators every 3 hours
+      data.forEach((d, i) => {
+        if (i % 3 === 0) {
+          const x = (i / 47) * width;
+          const y = height - padding + 25;
+
+          // Wind arrow
+          const arrow = `
+            <g transform="translate(${x}, ${y})">
+              <circle r="12" fill="rgba(149, 117, 205, 0.2)"/>
+              <text y="1" font-size="8" fill="white" text-anchor="middle">${d.windSpeed}</text>
+              <g transform="rotate(${d.windDir}, 0, 0)">
+                <path d="M 0,-8 L -3,-3 L 0,-5 L 3,-3 Z" fill="#9575cd"/>
+              </g>
+            </g>
+          `;
+          document.getElementById('wind').innerHTML += arrow;
+        }
+      });
+
+      // Time labels
+      data.forEach((d, i) => {
+        if (i % 3 === 0) {
+          const x = (i / 47) * width;
+          const timeStr = d.time.toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            hour12: true
+          });
+
+          const label = `<text x="${x}" y="${height - 5}"
+                        font-size="11" fill="rgba(255,255,255,0.5)"
+                        text-anchor="middle">${timeStr}</text>`;
+          document.getElementById('labels').innerHTML += label;
+        }
+      });
+
+      // Interactive overlay rectangles
+      data.forEach((d, i) => {
+        const x = (i / 47) * width - 25;
+        const rect = `<rect x="${x}" y="0" width="50" height="${height}"
+                      fill="transparent" data-hour="${i}" class="interactive-rect"
+                      style="cursor: pointer"/>`;
+        document.getElementById('interactive').innerHTML += rect;
+      });
+
+      // Add click handlers
+      document.querySelectorAll('.interactive-rect').forEach(rect => {
+        rect.addEventListener('click', (e) => {
+          const hour = parseInt(e.target.dataset.hour);
+          showHourDetail(data[hour]);
+        });
+      });
+
+      // Store data globally for detail view
+      window.weatherData = data;
+    }
+
+    // Show hour detail
+    function showHourDetail(data) {
+      const detail = document.getElementById('hourDetail');
+      const timeStr = data.time.toLocaleString('en-US', {
+        weekday: 'short',
+        hour: 'numeric',
+        hour12: true
+      });
+
+      document.getElementById('detailTime').textContent = timeStr;
+      document.getElementById('detailTemp').textContent = `${data.temp}°`;
+      document.getElementById('detailFeels').textContent = `${data.feelsLike}°`;
+      document.getElementById('detailPrecip').textContent = `${data.precip}%`;
+      document.getElementById('detailWind').textContent = `${data.windSpeed} mph`;
+      document.getElementById('detailHumidity').textContent = `${data.humidity}%`;
+      document.getElementById('detailClouds').textContent = `${data.clouds}%`;
+
+      detail.classList.add('active');
+
+      // Auto-hide after 3 seconds
+      setTimeout(() => {
+        detail.classList.remove('active');
+      }, 3000);
+    }
+
+    // Initialize
+    renderTimeline();
+
+    // Add smooth scrolling behavior
+    const timeline = document.getElementById('timeline');
+    let isDown = false;
+    let startX;
+    let scrollLeft;
+
+    timeline.addEventListener('mousedown', (e) => {
+      isDown = true;
+      startX = e.pageX - timeline.offsetLeft;
+      scrollLeft = timeline.scrollLeft;
+    });
+
+    timeline.addEventListener('mouseleave', () => {
+      isDown = false;
+    });
+
+    timeline.addEventListener('mouseup', () => {
+      isDown = false;
+    });
+
+    timeline.addEventListener('mousemove', (e) => {
+      if (!isDown) return;
+      e.preventDefault();
+      const x = e.pageX - timeline.offsetLeft;
+      const walk = (x - startX) * 2;
+      timeline.scrollLeft = scrollLeft - walk;
+    });
+  </script>
+</body>
+</html>

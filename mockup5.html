@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Mockup 5: Split View - Now vs Later Weather</title>
+  <style>
+    :root {
+      --background: #0e0b20;
+      --foreground: #f5f5f7;
+      --secondary: rgba(255, 255, 255, 0.72);
+      --panel-bg: rgba(28, 26, 45, 0.9);
+      --panel-border: rgba(255, 255, 255, 0.1);
+      --accent: #64b5ff;
+      --success: #66bb6a;
+      --warning: #ffeb3b;
+      --danger: #ef5350;
+      font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: linear-gradient(180deg, #17132f 0%, #0e0b20 100%);
+      color: var(--foreground);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .container {
+      max-width: 428px;
+      width: 100%;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    .header {
+      padding: 20px;
+      background: var(--panel-bg);
+      border-bottom: 1px solid var(--panel-border);
+    }
+
+    h1 {
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .subtitle {
+      color: var(--secondary);
+      font-size: 14px;
+    }
+
+    /* View Toggle */
+    .view-toggle {
+      display: flex;
+      gap: 8px;
+      padding: 12px 20px;
+      background: rgba(0, 0, 0, 0.2);
+      border-bottom: 1px solid var(--panel-border);
+    }
+
+    .toggle-button {
+      flex: 1;
+      padding: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      color: var(--secondary);
+      font-size: 12px;
+      font-weight: 500;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .toggle-button.active {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
+
+    /* Split Container */
+    .split-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Now Panel (Top) */
+    .now-panel {
+      flex: 0 0 55%;
+      background: var(--panel-bg);
+      border-bottom: 2px solid var(--accent);
+      padding: 20px;
+      overflow-y: auto;
+      position: relative;
+      transition: flex 0.3s ease;
+    }
+
+    .now-panel.minimized {
+      flex: 0 0 35%;
+    }
+
+    .panel-label {
+      position: absolute;
+      top: 12px;
+      left: 20px;
+      font-size: 11px;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      font-weight: 600;
+    }
+
+    .now-content {
+      margin-top: 20px;
+    }
+
+    .now-main {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    .now-temp {
+      font-size: 72px;
+      font-weight: 200;
+      line-height: 1;
+    }
+
+    .now-details {
+      text-align: right;
+    }
+
+    .now-condition {
+      font-size: 18px;
+      margin-bottom: 4px;
+    }
+
+    .now-feels {
+      font-size: 14px;
+      color: var(--secondary);
+    }
+
+    /* Hourly Timeline */
+    .hourly-timeline {
+      margin-bottom: 20px;
+    }
+
+    .timeline-header {
+      font-size: 13px;
+      color: var(--secondary);
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .timeline-scroll {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 8px;
+      scroll-snap-type: x mandatory;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .timeline-scroll::-webkit-scrollbar {
+      height: 4px;
+    }
+
+    .timeline-scroll::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 2px;
+    }
+
+    .timeline-scroll::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 2px;
+    }
+
+    .hour-block {
+      flex-shrink: 0;
+      width: 50px;
+      padding: 8px 4px;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 8px;
+      text-align: center;
+      scroll-snap-align: start;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .hour-block:hover,
+    .hour-block.selected {
+      background: rgba(255, 255, 255, 0.08);
+      transform: scale(1.05);
+    }
+
+    .hour-time {
+      font-size: 10px;
+      color: var(--secondary);
+      margin-bottom: 4px;
+    }
+
+    .hour-temp {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .hour-precip {
+      font-size: 10px;
+      color: var(--accent);
+      min-height: 12px;
+    }
+
+    /* Now Metrics Grid */
+    .now-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+
+    .metric-tile {
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 10px;
+      text-align: center;
+    }
+
+    .metric-icon {
+      font-size: 20px;
+      margin-bottom: 4px;
+    }
+
+    .metric-value {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+
+    .metric-name {
+      font-size: 10px;
+      color: var(--secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* Later Panel (Bottom) */
+    .later-panel {
+      flex: 1;
+      background: rgba(20, 18, 35, 0.95);
+      padding: 20px;
+      overflow-y: auto;
+      position: relative;
+    }
+
+    .later-panel.expanded {
+      flex: 0 0 65%;
+    }
+
+    .later-content {
+      margin-top: 20px;
+    }
+
+    /* Period Cards */
+    .period-cards {
+      display: grid;
+      gap: 12px;
+    }
+
+    .period-card {
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      padding: 12px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .period-card:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .period-time-block {
+      text-align: center;
+      min-width: 60px;
+    }
+
+    .period-day {
+      font-size: 11px;
+      color: var(--secondary);
+      text-transform: uppercase;
+      margin-bottom: 2px;
+    }
+
+    .period-time {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .period-chart {
+      position: relative;
+      height: 40px;
+    }
+
+    .temp-bar {
+      position: absolute;
+      height: 4px;
+      border-radius: 2px;
+      top: 10px;
+    }
+
+    .precip-bars {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 20px;
+      display: flex;
+      align-items: flex-end;
+      gap: 2px;
+    }
+
+    .precip-bar {
+      flex: 1;
+      background: var(--accent);
+      border-radius: 2px 2px 0 0;
+      opacity: 0.6;
+    }
+
+    .period-summary {
+      text-align: right;
+    }
+
+    .period-temps {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+
+    .period-temps .high {
+      color: var(--foreground);
+    }
+
+    .period-temps .low {
+      color: var(--secondary);
+    }
+
+    .period-precip {
+      font-size: 11px;
+      color: var(--accent);
+    }
+
+    /* Divider Handle */
+    .divider-handle {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 60px;
+      height: 24px;
+      background: var(--panel-bg);
+      border: 2px solid var(--accent);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: ns-resize;
+      z-index: 10;
+      top: calc(55% - 12px);
+      transition: top 0.3s ease;
+    }
+
+    .now-panel.minimized ~ .divider-handle {
+      top: calc(35% - 12px);
+    }
+
+    .divider-handle::before {
+      content: '';
+      width: 24px;
+      height: 2px;
+      background: var(--accent);
+      border-radius: 1px;
+      box-shadow: 0 -4px 0 var(--accent), 0 4px 0 var(--accent);
+    }
+
+    /* Comparison Mode */
+    .comparison-mode .split-container {
+      flex-direction: row;
+    }
+
+    .comparison-mode .now-panel,
+    .comparison-mode .later-panel {
+      flex: 1;
+      border-bottom: none;
+      border-right: 1px solid var(--panel-border);
+    }
+
+    .comparison-mode .divider-handle {
+      display: none;
+    }
+
+    /* UX Notes */
+    .ux-notes {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 16px;
+      margin: 20px;
+    }
+
+    .ux-notes h3 {
+      font-size: 14px;
+      margin-bottom: 8px;
+      color: var(--accent);
+    }
+
+    .ux-notes ul {
+      font-size: 13px;
+      color: var(--secondary);
+      line-height: 1.6;
+      padding-left: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Split Forecast</h1>
+      <p class="subtitle">San Carlos, CA • Now vs Later</p>
+    </div>
+
+    <!-- View Toggle -->
+    <div class="view-toggle">
+      <div class="toggle-button active" data-view="split">Split View</div>
+      <div class="toggle-button" data-view="compare">Side by Side</div>
+      <div class="toggle-button" data-view="focus-now">Focus Now</div>
+      <div class="toggle-button" data-view="focus-later">Focus Later</div>
+    </div>
+
+    <!-- Split Container -->
+    <div class="split-container">
+      <!-- Now Panel -->
+      <div class="now-panel" id="nowPanel">
+        <div class="panel-label">NEXT 12 HOURS</div>
+        <div class="now-content">
+          <div class="now-main">
+            <div class="now-temp" id="currentTemp">68°</div>
+            <div class="now-details">
+              <div class="now-condition">Partly Cloudy</div>
+              <div class="now-feels">Feels like 65°</div>
+            </div>
+          </div>
+
+          <!-- Hourly Timeline -->
+          <div class="hourly-timeline">
+            <div class="timeline-header">
+              <span>Hour by hour</span>
+              <span>Swipe →</span>
+            </div>
+            <div class="timeline-scroll" id="hourlyScroll"></div>
+          </div>
+
+          <!-- Now Metrics -->
+          <div class="now-metrics">
+            <div class="metric-tile">
+              <div class="metric-icon">💧</div>
+              <div class="metric-value">12%</div>
+              <div class="metric-name">Precip</div>
+            </div>
+            <div class="metric-tile">
+              <div class="metric-icon">💨</div>
+              <div class="metric-value">8 mph</div>
+              <div class="metric-name">Wind</div>
+            </div>
+            <div class="metric-tile">
+              <div class="metric-icon">💦</div>
+              <div class="metric-value">65%</div>
+              <div class="metric-name">Humidity</div>
+            </div>
+            <div class="metric-tile">
+              <div class="metric-icon">☁️</div>
+              <div class="metric-value">40%</div>
+              <div class="metric-name">Clouds</div>
+            </div>
+            <div class="metric-tile">
+              <div class="metric-icon">🌡️</div>
+              <div class="metric-value">52°</div>
+              <div class="metric-name">Dew Point</div>
+            </div>
+            <div class="metric-tile">
+              <div class="metric-icon">👁️</div>
+              <div class="metric-value">10 mi</div>
+              <div class="metric-name">Visibility</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Divider Handle -->
+      <div class="divider-handle" id="dividerHandle"></div>
+
+      <!-- Later Panel -->
+      <div class="later-panel" id="laterPanel">
+        <div class="panel-label">12-48 HOURS AHEAD</div>
+        <div class="later-content">
+          <div class="period-cards" id="periodCards"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- UX Notes -->
+    <div class="ux-notes" style="display: none;">
+      <h3>UX Interaction Patterns</h3>
+      <ul>
+        <li><strong>Split Focus:</strong> Top panel shows detailed next 12 hours, bottom shows 12-48 hour overview</li>
+        <li><strong>Draggable Divider:</strong> Adjust the split ratio by dragging the handle between panels</li>
+        <li><strong>View Modes:</strong> Switch between split, side-by-side comparison, or focus modes</li>
+        <li><strong>Hour-by-Hour:</strong> Scrollable timeline with individual hour details in the Now panel</li>
+        <li><strong>Period Blocks:</strong> 3-6 hour summaries in the Later panel for quick scanning</li>
+        <li><strong>Visual Hierarchy:</strong> Immediate hours get more detail, future gets condensed view</li>
+        <li><strong>Progressive Detail:</strong> Tap period cards to expand for hourly breakdown</li>
+        <li><strong>Color Temperature:</strong> Visual temperature indicators throughout</li>
+      </ul>
+    </div>
+  </div>
+
+  <script>
+    // Temperature color function
+    function getTemperatureColor(temp) {
+      const TEMP_MIN = -20;
+      const TEMP_MAX = 120;
+      const normalized = Math.max(0, Math.min(1, (temp - TEMP_MIN) / (TEMP_MAX - TEMP_MIN)));
+
+      const stops = [
+        { pos: 0.00, color: [255, 255, 255] },
+        { pos: 0.14, color: [147, 112, 219] },
+        { pos: 0.29, color: [100, 181, 246] },
+        { pos: 0.43, color: [102, 187, 106] },
+        { pos: 0.57, color: [255, 235, 59] },
+        { pos: 0.71, color: [239, 83, 80] },
+        { pos: 1.00, color: [136, 14, 79] }
+      ];
+
+      let lower = stops[0];
+      let upper = stops[stops.length - 1];
+
+      for (let i = 0; i < stops.length - 1; i++) {
+        if (normalized >= stops[i].pos && normalized <= stops[i + 1].pos) {
+          lower = stops[i];
+          upper = stops[i + 1];
+          break;
+        }
+      }
+
+      const range = upper.pos - lower.pos;
+      const factor = range === 0 ? 0 : (normalized - lower.pos) / range;
+
+      const r = Math.round(lower.color[0] + (upper.color[0] - lower.color[0]) * factor);
+      const g = Math.round(lower.color[1] + (upper.color[1] - lower.color[1]) * factor);
+      const b = Math.round(lower.color[2] + (upper.color[2] - lower.color[2]) * factor);
+
+      return `rgb(${r}, ${g}, ${b})`;
+    }
+
+    // Generate weather data
+    function generateWeatherData() {
+      const data = [];
+      const baseTime = new Date();
+      baseTime.setMinutes(0, 0, 0);
+
+      for (let i = 0; i < 48; i++) {
+        const time = new Date(baseTime.getTime() + i * 3600000);
+        const hour = time.getHours();
+
+        const dayProgress = (hour - 6) / 12;
+        const tempBase = 60 + Math.sin(dayProgress * Math.PI) * 12;
+        const temp = tempBase + (Math.random() - 0.5) * 8;
+
+        const precipBase = hour >= 4 && hour <= 8 ? 40 : 15;
+        const precip = Math.max(0, Math.min(100, precipBase + (Math.random() - 0.5) * 30));
+
+        const windSpeed = 5 + Math.random() * 15;
+        const windDir = Math.floor(Math.random() * 360);
+        const clouds = Math.max(0, Math.min(100, 30 + (Math.random() - 0.5) * 40));
+        const humidity = (hour >= 20 || hour <= 6 ? 75 : 55) + Math.round((Math.random() - 0.5) * 10);
+
+        data.push({
+          time,
+          temp: Math.round(temp),
+          feelsLike: Math.round(temp + (Math.random() - 0.5) * 5),
+          precip: Math.round(precip),
+          windSpeed: Math.round(windSpeed),
+          windDir,
+          clouds: Math.round(clouds),
+          humidity,
+          dewPoint: Math.round(temp - 15),
+          pressure: 1013 + Math.round((Math.random() - 0.5) * 10),
+          visibility: 10 - Math.round(Math.random() * 3)
+        });
+      }
+
+      return data;
+    }
+
+    const weatherData = generateWeatherData();
+
+    // Populate hourly timeline (first 12 hours)
+    function populateHourlyTimeline() {
+      const container = document.getElementById('hourlyScroll');
+      container.innerHTML = '';
+
+      for (let i = 0; i < 12; i++) {
+        const data = weatherData[i];
+        const block = document.createElement('div');
+        block.className = 'hour-block';
+        if (i === 0) block.classList.add('selected');
+
+        const timeStr = i === 0 ? 'Now' : data.time.toLocaleTimeString('en-US', {
+          hour: 'numeric',
+          hour12: true
+        });
+
+        block.innerHTML = `
+          <div class="hour-time">${timeStr}</div>
+          <div class="hour-temp" style="color: ${getTemperatureColor(data.temp)}">${data.temp}°</div>
+          <div class="hour-precip">${data.precip > 0 ? `${data.precip}%` : ''}</div>
+        `;
+
+        block.addEventListener('click', () => {
+          document.querySelectorAll('.hour-block').forEach(b => b.classList.remove('selected'));
+          block.classList.add('selected');
+          updateNowDetails(data);
+        });
+
+        container.appendChild(block);
+      }
+    }
+
+    // Update now panel details
+    function updateNowDetails(data) {
+      document.getElementById('currentTemp').textContent = `${data.temp}°`;
+      document.getElementById('currentTemp').style.color = getTemperatureColor(data.temp);
+      document.querySelector('.now-condition').textContent = data.clouds > 70 ? 'Cloudy' : data.clouds > 30 ? 'Partly Cloudy' : 'Clear';
+      document.querySelector('.now-feels').textContent = `Feels like ${data.feelsLike}°`;
+
+      // Update metrics
+      const metrics = document.querySelectorAll('.metric-value');
+      metrics[0].textContent = `${data.precip}%`;
+      metrics[1].textContent = `${data.windSpeed} mph`;
+      metrics[2].textContent = `${data.humidity}%`;
+      metrics[3].textContent = `${data.clouds}%`;
+      metrics[4].textContent = `${data.dewPoint}°`;
+      metrics[5].textContent = `${data.visibility} mi`;
+    }
+
+    // Populate period cards (12-48 hours)
+    function populatePeriodCards() {
+      const container = document.getElementById('periodCards');
+      container.innerHTML = '';
+
+      // Create 6-hour period blocks
+      const periods = [
+        { start: 12, end: 18, label: 'Afternoon' },
+        { start: 18, end: 24, label: 'Evening' },
+        { start: 24, end: 30, label: 'Night' },
+        { start: 30, end: 36, label: 'Morning' },
+        { start: 36, end: 42, label: 'Midday' },
+        { start: 42, end: 48, label: 'Afternoon' }
+      ];
+
+      periods.forEach(period => {
+        const periodData = weatherData.slice(period.start, period.end);
+        const maxTemp = Math.max(...periodData.map(d => d.temp));
+        const minTemp = Math.min(...periodData.map(d => d.temp));
+        const avgPrecip = Math.round(periodData.reduce((sum, d) => sum + d.precip, 0) / periodData.length);
+
+        const card = document.createElement('div');
+        card.className = 'period-card';
+
+        const startTime = periodData[0].time;
+        const dayName = startTime.toLocaleDateString('en-US', { weekday: 'short' });
+        const timeRange = `${startTime.getHours()}:00`;
+
+        // Create temperature gradient bar
+        const tempBarGradient = `linear-gradient(90deg,
+          ${getTemperatureColor(minTemp)},
+          ${getTemperatureColor((minTemp + maxTemp) / 2)},
+          ${getTemperatureColor(maxTemp)})`;
+
+        // Create precipitation bars
+        const precipBars = periodData.map(d =>
+          `<div class="precip-bar" style="height: ${(d.precip / 100) * 20}px"></div>`
+        ).join('');
+
+        card.innerHTML = `
+          <div class="period-time-block">
+            <div class="period-day">${dayName}</div>
+            <div class="period-time">${timeRange}</div>
+          </div>
+          <div class="period-chart">
+            <div class="temp-bar" style="background: ${tempBarGradient}; width: 100%"></div>
+            <div class="precip-bars">${precipBars}</div>
+          </div>
+          <div class="period-summary">
+            <div class="period-temps">
+              <span class="high">${maxTemp}°</span> /
+              <span class="low">${minTemp}°</span>
+            </div>
+            <div class="period-precip">${avgPrecip}% precip</div>
+          </div>
+        `;
+
+        container.appendChild(card);
+      });
+    }
+
+    // View mode switching
+    document.querySelectorAll('.toggle-button').forEach(button => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('.toggle-button').forEach(b => b.classList.remove('active'));
+        button.classList.add('active');
+
+        const view = button.dataset.view;
+        const container = document.querySelector('.split-container');
+        const nowPanel = document.getElementById('nowPanel');
+        const laterPanel = document.getElementById('laterPanel');
+
+        // Remove all mode classes
+        container.classList.remove('comparison-mode');
+        nowPanel.classList.remove('minimized');
+        laterPanel.classList.remove('expanded');
+
+        switch (view) {
+          case 'compare':
+            container.classList.add('comparison-mode');
+            break;
+          case 'focus-now':
+            laterPanel.classList.add('expanded');
+            nowPanel.classList.remove('minimized');
+            break;
+          case 'focus-later':
+            nowPanel.classList.add('minimized');
+            break;
+          default: // split
+            // Default state
+            break;
+        }
+      });
+    });
+
+    // Draggable divider
+    const divider = document.getElementById('dividerHandle');
+    const nowPanel = document.getElementById('nowPanel');
+    const container = document.querySelector('.split-container');
+    let isDragging = false;
+    let startY = 0;
+    let startHeight = 0;
+
+    divider.addEventListener('mousedown', startDrag);
+    divider.addEventListener('touchstart', startDrag);
+
+    function startDrag(e) {
+      isDragging = true;
+      startY = e.touches ? e.touches[0].clientY : e.clientY;
+      startHeight = nowPanel.offsetHeight;
+      document.body.style.userSelect = 'none';
+    }
+
+    document.addEventListener('mousemove', drag);
+    document.addEventListener('touchmove', drag);
+
+    function drag(e) {
+      if (!isDragging) return;
+
+      const currentY = e.touches ? e.touches[0].clientY : e.clientY;
+      const deltaY = currentY - startY;
+      const containerHeight = container.offsetHeight;
+      const newHeight = startHeight + deltaY;
+      const percentage = (newHeight / containerHeight) * 100;
+
+      // Limit between 25% and 75%
+      if (percentage >= 25 && percentage <= 75) {
+        nowPanel.style.flex = `0 0 ${percentage}%`;
+        divider.style.top = `calc(${percentage}% - 12px)`;
+      }
+    }
+
+    document.addEventListener('mouseup', endDrag);
+    document.addEventListener('touchend', endDrag);
+
+    function endDrag() {
+      isDragging = false;
+      document.body.style.userSelect = '';
+    }
+
+    // Initialize
+    populateHourlyTimeline();
+    populatePeriodCards();
+    updateNowDetails(weatherData[0]);
+  </script>
+</body>
+</html>

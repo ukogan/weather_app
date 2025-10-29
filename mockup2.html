@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Mockup 2: Stacked Metrics Dashboard - 48 Hour Weather</title>
+  <style>
+    :root {
+      --background: #0e0b20;
+      --foreground: #f5f5f7;
+      --secondary: rgba(255, 255, 255, 0.72);
+      --panel-bg: rgba(28, 26, 45, 0.9);
+      --panel-border: rgba(255, 255, 255, 0.1);
+      --accent: #64b5ff;
+      --temp-gradient: linear-gradient(90deg, #64b5ff, #66bb6a, #ffeb3b, #ef5350);
+      font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: linear-gradient(180deg, #17132f 0%, #0e0b20 100%);
+      color: var(--foreground);
+      min-height: 100vh;
+      padding: 20px 0;
+    }
+
+    .container {
+      max-width: 428px;
+      margin: 0 auto;
+      padding: 0 16px;
+    }
+
+    .header {
+      margin-bottom: 20px;
+    }
+
+    h1 {
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      color: var(--secondary);
+      font-size: 14px;
+    }
+
+    /* Tab Navigation */
+    .metric-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      padding: 0 16px;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .metric-tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    .metric-tab {
+      flex-shrink: 0;
+      padding: 10px 16px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 20px;
+      font-size: 14px;
+      color: var(--secondary);
+      cursor: pointer;
+      transition: all 0.3s ease;
+      white-space: nowrap;
+    }
+
+    .metric-tab.active {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+      transform: scale(1.05);
+    }
+
+    /* Metric Panels */
+    .metric-panel {
+      display: none;
+      animation: slideIn 0.3s ease;
+    }
+
+    .metric-panel.active {
+      display: block;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .panel {
+      background: var(--panel-bg);
+      backdrop-filter: blur(24px);
+      border: 1px solid var(--panel-border);
+      border-radius: 18px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .panel-title {
+      font-size: 14px;
+      letter-spacing: 0.1em;
+      color: var(--secondary);
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .time-range {
+      font-size: 12px;
+      color: var(--accent);
+    }
+
+    /* Chart Container */
+    .chart-container {
+      position: relative;
+      height: 200px;
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+
+    .chart-canvas {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Hour Scroll */
+    .hour-scroll {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 8px;
+      scroll-snap-type: x mandatory;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .hour-scroll::-webkit-scrollbar {
+      height: 4px;
+    }
+
+    .hour-scroll::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 2px;
+    }
+
+    .hour-scroll::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 2px;
+    }
+
+    .hour-card {
+      flex-shrink: 0;
+      width: 60px;
+      padding: 8px 4px;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 8px;
+      text-align: center;
+      font-size: 12px;
+      scroll-snap-align: start;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .hour-card:hover,
+    .hour-card.selected {
+      background: rgba(255, 255, 255, 0.08);
+      transform: scale(1.05);
+    }
+
+    .hour-time {
+      color: var(--secondary);
+      margin-bottom: 4px;
+    }
+
+    .hour-value {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+
+    .hour-secondary {
+      font-size: 10px;
+      color: var(--accent);
+    }
+
+    /* Summary Stats */
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .summary-stat {
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 12px;
+      text-align: center;
+    }
+
+    .summary-label {
+      font-size: 11px;
+      color: var(--secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+    }
+
+    .summary-value {
+      font-size: 20px;
+      font-weight: 600;
+    }
+
+    /* Wind Direction Compass */
+    .wind-compass {
+      width: 120px;
+      height: 120px;
+      margin: 0 auto 16px;
+      position: relative;
+    }
+
+    .compass-circle {
+      width: 100%;
+      height: 100%;
+      border: 2px solid rgba(255, 255, 255, 0.1);
+      border-radius: 50%;
+      position: relative;
+    }
+
+    .compass-arrow {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 80%;
+      height: 2px;
+      background: var(--accent);
+      transform-origin: left center;
+      transition: transform 0.5s ease;
+    }
+
+    .compass-arrow::after {
+      content: '';
+      position: absolute;
+      right: -8px;
+      top: -6px;
+      width: 0;
+      height: 0;
+      border-left: 12px solid var(--accent);
+      border-top: 7px solid transparent;
+      border-bottom: 7px solid transparent;
+    }
+
+    .compass-labels {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+    }
+
+    .compass-label {
+      position: absolute;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--secondary);
+    }
+
+    .compass-label.n { top: -5px; left: 50%; transform: translateX(-50%); }
+    .compass-label.s { bottom: -5px; left: 50%; transform: translateX(-50%); }
+    .compass-label.e { right: -5px; top: 50%; transform: translateY(-50%); }
+    .compass-label.w { left: -5px; top: 50%; transform: translateY(-50%); }
+
+    /* Swipe Hint */
+    .swipe-hint {
+      text-align: center;
+      color: var(--secondary);
+      font-size: 12px;
+      margin: 16px 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .swipe-arrow {
+      animation: swipeHint 1.5s infinite;
+    }
+
+    @keyframes swipeHint {
+      0%, 100% { transform: translateX(0); }
+      50% { transform: translateX(5px); }
+    }
+
+    /* UX Notes */
+    .ux-notes {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 16px;
+      margin: 20px 16px;
+    }
+
+    .ux-notes h3 {
+      font-size: 14px;
+      margin-bottom: 8px;
+      color: var(--accent);
+    }
+
+    .ux-notes ul {
+      font-size: 13px;
+      color: var(--secondary);
+      line-height: 1.6;
+      padding-left: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>48-Hour Forecast</h1>
+      <p class="subtitle">San Carlos, CA • Stacked Metrics View</p>
+    </div>
+  </div>
+
+  <!-- Tab Navigation -->
+  <div class="metric-tabs">
+    <div class="metric-tab active" data-metric="temperature">Temperature</div>
+    <div class="metric-tab" data-metric="precipitation">Precipitation</div>
+    <div class="metric-tab" data-metric="wind">Wind</div>
+    <div class="metric-tab" data-metric="humidity">Humidity & Dew</div>
+  </div>
+
+  <div class="container">
+    <!-- Temperature Panel -->
+    <div class="metric-panel active" id="temperature-panel">
+      <div class="panel">
+        <h2 class="panel-title">
+          TEMPERATURE TREND
+          <span class="time-range">Next 48 Hours</span>
+        </h2>
+        <div class="chart-container">
+          <canvas class="chart-canvas" id="temp-chart"></canvas>
+        </div>
+        <div class="hour-scroll" id="temp-hours"></div>
+        <div class="summary-grid">
+          <div class="summary-stat">
+            <div class="summary-label">High</div>
+            <div class="summary-value">72°</div>
+          </div>
+          <div class="summary-stat">
+            <div class="summary-label">Low</div>
+            <div class="summary-value">54°</div>
+          </div>
+          <div class="summary-stat">
+            <div class="summary-label">Feels Like</div>
+            <div class="summary-value">68°</div>
+          </div>
+          <div class="summary-stat">
+            <div class="summary-label">Average</div>
+            <div class="summary-value">63°</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Precipitation Panel -->
+    <div class="metric-panel" id="precipitation-panel">
+      <div class="panel">
+        <h2 class="panel-title">
+          PRECIPITATION FORECAST
+          <span class="time-range">Next 48 Hours</span>
+        </h2>
+        <div class="chart-container">
+          <canvas class="chart-canvas" id="precip-chart"></canvas>
+        </div>
+        <div class="hour-scroll" id="precip-hours"></div>
+        <div class="summary-grid">
+          <div class="summary-stat">
+            <div class="summary-label">Max Chance</div>
+            <div class="summary-value">45%</div>
+          </div>
+          <div class="summary-stat">
+            <div class="summary-label">Peak Time</div>
+            <div class="summary-value">6 AM</div>
+          </div>
+          <div class="summary-stat">
+            <div class="summary-label">Total Rain</div>
+            <div class="summary-value">0.2"</div>
+          </div>
+          <div class="summary-stat">
+            <div class="summary-label">Duration</div>
+            <div class="summary-value">4 hrs</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Wind Panel -->
+    <div class="metric-panel" id="wind-panel">
+      <div class="panel">
+        <h2 class="panel-title">
+          WIND CONDITIONS
+          <span class="time-range">Next 48 Hours</span>
+        </h2>
+        <div class="wind-compass">
+          <div class="compass-circle">
+            <div class="compass-labels">
+              <span class="compass-label n">N</span>
+              <span class="compass-label s">S</span>
+              <span class="compass-label e">E</span>
+              <span class="compass-label w">W</span>
+            </div>
+            <div class="compass-arrow" id="wind-arrow"></div>
+          </div>
+        </div>
+        <div class="chart-container" style="height: 120px;">
+          <canvas class="chart-canvas" id="wind-chart"></canvas>
+        </div>
+        <div class="hour-scroll" id="wind-hours"></div>
+        <div class="summary-grid">
+          <div class="summary-stat">
+            <div class="summary-label">Max Gust</div>
+            <div class="summary-value">22 mph</div>
+          </div>
+          <div class="summary-stat">
+            <div class="summary-label">Average</div>
+            <div class="summary-value">12 mph</div>
+          </div>
+          <div class="summary-stat">
+            <div class="summary-label">Direction</div>
+            <div class="summary-value">NW</div>
+          </div>
+          <div class="summary-stat">
+            <div class="summary-label">Calm Hours</div>
+            <div class="summary-value">18</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Humidity Panel -->
+    <div class="metric-panel" id="humidity-panel">
+      <div class="panel">
+        <h2 class="panel-title">
+          HUMIDITY & DEW POINT
+          <span class="time-range">Next 48 Hours</span>
+        </h2>
+        <div class="chart-container">
+          <canvas class="chart-canvas" id="humidity-chart"></canvas>
+        </div>
+        <div class="hour-scroll" id="humidity-hours"></div>
+        <div class="summary-grid">
+          <div class="summary-stat">
+            <div class="summary-label">Max Humidity</div>
+            <div class="summary-value">85%</div>
+          </div>
+          <div class="summary-stat">
+            <div class="summary-label">Min Humidity</div>
+            <div class="summary-value">45%</div>
+          </div>
+          <div class="summary-stat">
+            <div class="summary-label">Dew Point</div>
+            <div class="summary-value">48°</div>
+          </div>
+          <div class="summary-stat">
+            <div class="summary-label">Comfort</div>
+            <div class="summary-value">Good</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="swipe-hint">
+      <span class="swipe-arrow">←</span>
+      Swipe between metrics
+      <span class="swipe-arrow">→</span>
+    </div>
+
+    <!-- UX Notes -->
+    <div class="ux-notes">
+      <h3>UX Interaction Patterns</h3>
+      <ul>
+        <li><strong>Tab Navigation:</strong> Tap tabs or swipe panels to switch between metrics</li>
+        <li><strong>Dedicated Focus:</strong> Each panel shows one metric in detail with context</li>
+        <li><strong>Hourly Cards:</strong> Scroll horizontally through individual hour details</li>
+        <li><strong>Visual Charts:</strong> Line/bar charts provide quick trend recognition</li>
+        <li><strong>Summary Stats:</strong> Key metrics highlighted below each chart</li>
+        <li><strong>Wind Compass:</strong> Animated direction indicator for current conditions</li>
+        <li><strong>Progressive Disclosure:</strong> Tap hour cards for more detailed information</li>
+      </ul>
+    </div>
+  </div>
+
+  <script>
+    // Temperature color function
+    function getTemperatureColor(temp) {
+      const TEMP_MIN = -20;
+      const TEMP_MAX = 120;
+      const normalized = Math.max(0, Math.min(1, (temp - TEMP_MIN) / (TEMP_MAX - TEMP_MIN)));
+
+      const stops = [
+        { pos: 0.00, color: [255, 255, 255] },
+        { pos: 0.14, color: [147, 112, 219] },
+        { pos: 0.29, color: [100, 181, 246] },
+        { pos: 0.43, color: [102, 187, 106] },
+        { pos: 0.57, color: [255, 235, 59] },
+        { pos: 0.71, color: [239, 83, 80] },
+        { pos: 1.00, color: [136, 14, 79] }
+      ];
+
+      let lower = stops[0];
+      let upper = stops[stops.length - 1];
+
+      for (let i = 0; i < stops.length - 1; i++) {
+        if (normalized >= stops[i].pos && normalized <= stops[i + 1].pos) {
+          lower = stops[i];
+          upper = stops[i + 1];
+          break;
+        }
+      }
+
+      const range = upper.pos - lower.pos;
+      const factor = range === 0 ? 0 : (normalized - lower.pos) / range;
+
+      const r = Math.round(lower.color[0] + (upper.color[0] - lower.color[0]) * factor);
+      const g = Math.round(lower.color[1] + (upper.color[1] - lower.color[1]) * factor);
+      const b = Math.round(lower.color[2] + (upper.color[2] - lower.color[2]) * factor);
+
+      return `rgb(${r}, ${g}, ${b})`;
+    }
+
+    // Generate sample data
+    function generateWeatherData() {
+      const data = [];
+      const baseTime = new Date();
+      baseTime.setMinutes(0, 0, 0);
+
+      for (let i = 0; i < 48; i++) {
+        const time = new Date(baseTime.getTime() + i * 3600000);
+        const hour = time.getHours();
+
+        const dayProgress = (hour - 6) / 12;
+        const tempBase = 60 + Math.sin(dayProgress * Math.PI) * 12;
+        const temp = tempBase + (Math.random() - 0.5) * 8;
+
+        const precipBase = hour >= 4 && hour <= 8 ? 40 : 15;
+        const precip = Math.max(0, Math.min(100, precipBase + (Math.random() - 0.5) * 30));
+
+        const windSpeed = 5 + Math.random() * 15;
+        const windDir = Math.floor(Math.random() * 360);
+
+        const humidity = (hour >= 20 || hour <= 6 ? 75 : 55) + Math.round((Math.random() - 0.5) * 10);
+
+        data.push({
+          time,
+          temp: Math.round(temp),
+          feelsLike: Math.round(temp + (Math.random() - 0.5) * 5),
+          precip: Math.round(precip),
+          windSpeed: Math.round(windSpeed),
+          windDir,
+          humidity,
+          dewPoint: Math.round(temp - 15)
+        });
+      }
+
+      return data;
+    }
+
+    const weatherData = generateWeatherData();
+
+    // Draw charts
+    function drawLineChart(canvasId, data, color, fillColor) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+
+      const ctx = canvas.getContext('2d');
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width * 2;
+      canvas.height = rect.height * 2;
+      ctx.scale(2, 2);
+
+      const width = rect.width;
+      const height = rect.height;
+      const padding = 20;
+
+      const min = Math.min(...data);
+      const max = Math.max(...data);
+      const range = max - min || 1;
+
+      ctx.clearRect(0, 0, width, height);
+
+      // Draw grid lines
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= 4; i++) {
+        const y = padding + (height - padding * 2) * (i / 4);
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+      }
+
+      // Draw filled area
+      if (fillColor) {
+        ctx.fillStyle = fillColor;
+        ctx.beginPath();
+        ctx.moveTo(0, height - padding);
+
+        data.forEach((value, i) => {
+          const x = (i / (data.length - 1)) * width;
+          const y = height - padding - ((value - min) / range) * (height - padding * 2);
+          ctx.lineTo(x, y);
+        });
+
+        ctx.lineTo(width, height - padding);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // Draw line
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+
+      data.forEach((value, i) => {
+        const x = (i / (data.length - 1)) * width;
+        const y = height - padding - ((value - min) / range) * (height - padding * 2);
+
+        if (i === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+
+      ctx.stroke();
+
+      // Draw points
+      data.forEach((value, i) => {
+        if (i % 3 === 0) {
+          const x = (i / (data.length - 1)) * width;
+          const y = height - padding - ((value - min) / range) * (height - padding * 2);
+
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(x, y, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
+    }
+
+    // Populate hour cards
+    function populateHourCards(containerId, data, valueKey, unit, secondaryKey, secondaryUnit) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+
+      container.innerHTML = '';
+
+      data.forEach((d, i) => {
+        const card = document.createElement('div');
+        card.className = 'hour-card';
+
+        const timeStr = d.time.toLocaleTimeString('en-US', {
+          hour: 'numeric',
+          hour12: true
+        });
+
+        let valueColor = '';
+        if (valueKey === 'temp') {
+          valueColor = `style="color: ${getTemperatureColor(d[valueKey])}"`;
+        }
+
+        card.innerHTML = `
+          <div class="hour-time">${timeStr}</div>
+          <div class="hour-value" ${valueColor}>${d[valueKey]}${unit}</div>
+          ${secondaryKey ? `<div class="hour-secondary">${d[secondaryKey]}${secondaryUnit}</div>` : ''}
+        `;
+
+        container.appendChild(card);
+      });
+    }
+
+    // Initialize panels
+    function initializePanels() {
+      // Temperature
+      drawLineChart('temp-chart',
+        weatherData.map(d => d.temp),
+        '#ef5350',
+        'rgba(239, 83, 80, 0.1)'
+      );
+      populateHourCards('temp-hours', weatherData, 'temp', '°', 'feelsLike', '°');
+
+      // Precipitation
+      drawLineChart('precip-chart',
+        weatherData.map(d => d.precip),
+        '#64b5ff',
+        'rgba(100, 181, 255, 0.2)'
+      );
+      populateHourCards('precip-hours', weatherData, 'precip', '%');
+
+      // Wind
+      drawLineChart('wind-chart',
+        weatherData.map(d => d.windSpeed),
+        '#9575cd',
+        'rgba(149, 117, 205, 0.1)'
+      );
+      populateHourCards('wind-hours', weatherData, 'windSpeed', ' mph');
+
+      // Humidity
+      drawLineChart('humidity-chart',
+        weatherData.map(d => d.humidity),
+        '#4db6ac',
+        'rgba(77, 182, 172, 0.1)'
+      );
+      populateHourCards('humidity-hours', weatherData, 'humidity', '%', 'dewPoint', '°');
+
+      // Animate wind compass
+      animateWindCompass();
+    }
+
+    // Wind compass animation
+    function animateWindCompass() {
+      const arrow = document.getElementById('wind-arrow');
+      if (!arrow) return;
+
+      let currentIndex = 0;
+
+      setInterval(() => {
+        const dir = weatherData[currentIndex].windDir;
+        arrow.style.transform = `translate(-50%, -50%) rotate(${dir}deg)`;
+        currentIndex = (currentIndex + 1) % weatherData.length;
+      }, 2000);
+    }
+
+    // Tab switching
+    document.querySelectorAll('.metric-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        // Remove active from all tabs and panels
+        document.querySelectorAll('.metric-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.metric-panel').forEach(p => p.classList.remove('active'));
+
+        // Add active to clicked tab and corresponding panel
+        tab.classList.add('active');
+        const metric = tab.dataset.metric;
+        const panel = document.getElementById(`${metric}-panel`);
+        if (panel) panel.classList.add('active');
+      });
+    });
+
+    // Touch/swipe handling for panels
+    let touchStartX = 0;
+    let touchEndX = 0;
+    const panels = ['temperature', 'precipitation', 'wind', 'humidity'];
+    let currentPanelIndex = 0;
+
+    document.addEventListener('touchstart', e => {
+      touchStartX = e.changedTouches[0].screenX;
+    });
+
+    document.addEventListener('touchend', e => {
+      touchEndX = e.changedTouches[0].screenX;
+      handleSwipe();
+    });
+
+    function handleSwipe() {
+      const swipeThreshold = 50;
+      const diff = touchStartX - touchEndX;
+
+      if (Math.abs(diff) < swipeThreshold) return;
+
+      if (diff > 0 && currentPanelIndex < panels.length - 1) {
+        // Swipe left - next panel
+        currentPanelIndex++;
+      } else if (diff < 0 && currentPanelIndex > 0) {
+        // Swipe right - previous panel
+        currentPanelIndex--;
+      }
+
+      // Update active tab and panel
+      document.querySelectorAll('.metric-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.metric-panel').forEach(p => p.classList.remove('active'));
+
+      const activeTab = document.querySelector(`.metric-tab[data-metric="${panels[currentPanelIndex]}"]`);
+      const activePanel = document.getElementById(`${panels[currentPanelIndex]}-panel`);
+
+      if (activeTab) activeTab.classList.add('active');
+      if (activePanel) activePanel.classList.add('active');
+
+      // Scroll tab into view
+      if (activeTab) {
+        activeTab.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+      }
+    }
+
+    // Initialize on load
+    initializePanels();
+  </script>
+</body>
+</html>
