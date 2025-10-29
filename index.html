@@ -41,6 +41,9 @@
     <main class="app__content">
       <section class="panel panel--hourly">
         <h2 class="panel__title">HOURLY FORECAST</h2>
+        <div class="chart-container">
+          <canvas class="chart-canvas" id="hourly-chart"></canvas>
+        </div>
         <div class="hourly" id="hourly-forecast"></div>
       </section>
 
@@ -92,9 +95,6 @@
   <template id="hourly-card-template">
     <div class="hourly__card">
       <div class="hourly__time"></div>
-      <div class="hourly__temp-bar-container">
-        <div class="hourly__temp-bar"></div>
-      </div>
       <div class="hourly__temp"></div>
       <div class="hourly__precip"></div>
     </div>
@@ -121,6 +121,6 @@
   </template>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js?v=15" type="module"></script>
+  <script src="app.js?v=16" type="module"></script>
 </body>
 </html>

@@ -582,6 +582,86 @@ function renderForecast() {
   renderDetails(details);
 }
 
+function drawLineChart(canvasId, data, color, fillColor) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * 2;
+  canvas.height = rect.height * 2;
+  ctx.scale(2, 2);
+
+  const width = rect.width;
+  const height = rect.height;
+  const padding = 20;
+
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+
+  ctx.clearRect(0, 0, width, height);
+
+  // Draw grid lines
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = padding + (height - padding * 2) * (i / 4);
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+
+  // Draw filled area
+  if (fillColor) {
+    ctx.fillStyle = fillColor;
+    ctx.beginPath();
+    ctx.moveTo(0, height - padding);
+
+    data.forEach((value, i) => {
+      const x = (i / (data.length - 1)) * width;
+      const y = height - padding - ((value - min) / range) * (height - padding * 2);
+      ctx.lineTo(x, y);
+    });
+
+    ctx.lineTo(width, height - padding);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Draw line
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+
+  data.forEach((value, i) => {
+    const x = (i / (data.length - 1)) * width;
+    const y = height - padding - ((value - min) / range) * (height - padding * 2);
+
+    if (i === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  });
+
+  ctx.stroke();
+
+  // Draw points
+  data.forEach((value, i) => {
+    if (i % 3 === 0) {
+      const x = (i / (data.length - 1)) * width;
+      const y = height - padding - ((value - min) / range) * (height - padding * 2);
+
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+}
+
 function renderHourly(hourly) {
   elements.hourlyForecast.innerHTML = '';
   if (!hourly.length || !elements.hourlyTemplate) {
@@ -589,29 +669,29 @@ function renderHourly(hourly) {
     return;
   }
 
-  // Find min/max temps in hourly data
+  // Draw temperature chart
   const temps = hourly.map(item => item.temperature).filter(t => t != null);
-  const minTemp = Math.min(...temps);
-  const maxTemp = Math.max(...temps);
-  const tempRange = maxTemp - minTemp || 1;
+  if (temps.length > 0) {
+    drawLineChart('hourly-chart', temps, '#ef5350', 'rgba(239, 83, 80, 0.1)');
+  }
 
-  console.log('Hourly temps:', { minTemp, maxTemp, tempRange });
-
+  // Render hourly cards
   const fragment = document.createDocumentFragment();
 
   hourly.forEach((item) => {
     const node = elements.hourlyTemplate.content.firstElementChild.cloneNode(true);
-    node.querySelector('.hourly__time').textContent = item.label;
-    node.querySelector('.hourly__temp').textContent = item.temperature != null ? formatTemperature(item.temperature) : '--';
 
-    const tempBar = node.querySelector('.hourly__temp-bar');
+    // Time label
+    node.querySelector('.hourly__time').textContent = item.label;
+
+    // Temperature with color
+    const tempEl = node.querySelector('.hourly__temp');
+    tempEl.textContent = item.temperature != null ? formatTemperature(item.temperature) : '--';
     if (item.temperature != null) {
-      const heightPercent = ((item.temperature - minTemp) / tempRange) * 100;
-      const color = getTemperatureColor(item.temperature);
-      tempBar.style.height = `${Math.max(10, heightPercent)}%`;
-      tempBar.style.backgroundColor = color;
+      tempEl.style.color = getTemperatureColor(item.temperature);
     }
 
+    // Precipitation chance
     const precipEl = node.querySelector('.hourly__precip');
     if (item.precipitationChance != null && item.precipitationChance > 0) {
       precipEl.textContent = `${Math.round(item.precipitationChance)}%`;
