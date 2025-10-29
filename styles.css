@@ -20,13 +20,14 @@ body {
   color: var(--foreground);
   display: flex;
   justify-content: center;
-  overflow: hidden;
 }
 
 .screen {
   width: 100%;
   min-height: 100vh;
   overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Loading Screen */
