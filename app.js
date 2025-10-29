@@ -446,6 +446,9 @@ function buildHourlyForecastFromTemps(hourlyTemps) {
       icon: null,
       summary: null,
       precipitationChance: item.precipitationChance,
+      precipitationAmount: item.precipitationAmount,
+      windSpeed: item.windSpeed,
+      humidity: item.humidity,
     };
   });
 }
@@ -460,14 +463,29 @@ function extractHourlyTemperatures(xml) {
   const timeLayouts = buildTimeLayoutMap(dataNode);
   const temps = extractTemperatureSeries(parameters, 'hourly', timeLayouts);
 
-  // Also extract precipitation probabilities
+  // Extract precipitation probabilities
   const popNode = parameters.querySelector('probability-of-precipitation[type="floating"]');
   const pops = popNode ? Array.from(popNode.querySelectorAll('value')).map(parseMaybeNumber) : [];
 
-  // Merge temps and precipitation
+  // Extract precipitation amounts (inches)
+  const qpfNode = parameters.querySelector('hourly-qpf[type="floating"]');
+  const qpfs = qpfNode ? Array.from(qpfNode.querySelectorAll('value')).map(parseMaybeNumber) : [];
+
+  // Extract wind speed (sustained, mph)
+  const windNode = parameters.querySelector('wind-speed[type="sustained"]');
+  const windSpeeds = windNode ? Array.from(windNode.querySelectorAll('value')).map(parseMaybeNumber) : [];
+
+  // Extract humidity (relative, percent)
+  const humidityNode = parameters.querySelector('humidity[type="relative"]');
+  const humidities = humidityNode ? Array.from(humidityNode.querySelectorAll('value')).map(parseMaybeNumber) : [];
+
+  // Merge all data series
   return temps.map((temp, index) => ({
     ...temp,
-    precipitationChance: pops[index] ?? null
+    precipitationChance: pops[index] ?? null,
+    precipitationAmount: qpfs[index] ?? null,
+    windSpeed: windSpeeds[index] ?? null,
+    humidity: humidities[index] ?? null
   }));
 }
 
@@ -583,7 +601,7 @@ function renderForecast() {
   renderDetails(details);
 }
 
-function drawLineChart(canvasId, data, color, fillColor) {
+function drawMultiSeriesChart(canvasId, hourlyData) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) {
     console.error('Canvas not found:', canvasId);
@@ -596,13 +614,13 @@ function drawLineChart(canvasId, data, color, fillColor) {
   // If canvas has no dimensions, retry after a short delay
   if (rect.height === 0) {
     console.log('Canvas not yet visible, retrying...');
-    setTimeout(() => drawLineChart(canvasId, data, color, fillColor), 100);
+    setTimeout(() => drawMultiSeriesChart(canvasId, hourlyData), 100);
     return;
   }
 
   // Calculate width based on data points (72px per hour to match card width + gap)
   const pointWidth = 72; // 60px card + 12px gap
-  const width = data.length * pointWidth;
+  const width = hourlyData.length * pointWidth;
   const height = rect.height;
 
   canvas.width = width * 2;
@@ -610,10 +628,7 @@ function drawLineChart(canvasId, data, color, fillColor) {
   ctx.scale(2, 2);
 
   const padding = 20;
-
-  const min = Math.min(...data);
-  const max = Math.max(...data);
-  const range = max - min || 1;
+  const chartHeight = height - padding * 2;
 
   ctx.clearRect(0, 0, width, height);
 
@@ -621,55 +636,93 @@ function drawLineChart(canvasId, data, color, fillColor) {
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
   ctx.lineWidth = 1;
   for (let i = 0; i <= 4; i++) {
-    const y = padding + (height - padding * 2) * (i / 4);
+    const y = padding + chartHeight * (i / 4);
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(width, y);
     ctx.stroke();
   }
 
-  // Draw filled area
-  if (fillColor) {
-    ctx.fillStyle = fillColor;
-    ctx.beginPath();
-    ctx.moveTo(pointWidth / 2, height - padding);
-
-    data.forEach((value, i) => {
-      const x = pointWidth / 2 + i * pointWidth;
-      const y = height - padding - ((value - min) / range) * (height - padding * 2);
-      ctx.lineTo(x, y);
-    });
-
-    ctx.lineTo(pointWidth / 2 + (data.length - 1) * pointWidth, height - padding);
-    ctx.closePath();
-    ctx.fill();
+  // Helper function to normalize values to chart range
+  function normalizeData(values, minVal, maxVal) {
+    const range = maxVal - minVal || 1;
+    return values.map(v => v != null ? ((v - minVal) / range) : null);
   }
 
-  // Draw line
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
+  // Extract data series
+  const temps = hourlyData.map(d => d.temperature);
+  const precipProbs = hourlyData.map(d => d.precipitationChance);
+  const precipAmounts = hourlyData.map(d => d.precipitationAmount);
+  const windSpeeds = hourlyData.map(d => d.windSpeed);
+  const humidities = hourlyData.map(d => d.humidity);
 
-  data.forEach((value, i) => {
-    const x = pointWidth / 2 + i * pointWidth;
-    const y = height - padding - ((value - min) / range) * (height - padding * 2);
+  // Find ranges for each series
+  const tempMin = Math.min(...temps.filter(v => v != null));
+  const tempMax = Math.max(...temps.filter(v => v != null));
 
-    if (i === 0) {
-      ctx.moveTo(x, y);
-    } else {
-      ctx.lineTo(x, y);
+  // Normalize each series (0-1 range)
+  const tempNorm = normalizeData(temps, tempMin, tempMax);
+  const precipProbNorm = normalizeData(precipProbs, 0, 100);
+  const precipAmountNorm = normalizeData(precipAmounts, 0, Math.max(0.5, Math.max(...precipAmounts.filter(v => v != null))));
+  const windNorm = normalizeData(windSpeeds, 0, Math.max(20, Math.max(...windSpeeds.filter(v => v != null))));
+  const humidityNorm = normalizeData(humidities, 0, 100);
+
+  // Draw precipitation amount bars (blue, transparent)
+  ctx.fillStyle = 'rgba(100, 181, 255, 0.15)';
+  precipAmountNorm.forEach((norm, i) => {
+    if (norm != null && norm > 0) {
+      const x = pointWidth / 2 + i * pointWidth;
+      const barHeight = norm * chartHeight;
+      const y = height - padding - barHeight;
+      const barWidth = pointWidth * 0.6; // 60% of point width
+
+      ctx.fillRect(x - barWidth / 2, y, barWidth, barHeight);
     }
   });
 
-  ctx.stroke();
+  // Helper to draw a line series
+  function drawLineSeries(normalizedData, color, lineWidth = 2) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.beginPath();
 
-  // Draw points
-  data.forEach((value, i) => {
-    if (i % 3 === 0) {
+    let started = false;
+    normalizedData.forEach((norm, i) => {
+      if (norm != null) {
+        const x = pointWidth / 2 + i * pointWidth;
+        const y = height - padding - norm * chartHeight;
+
+        if (!started) {
+          ctx.moveTo(x, y);
+          started = true;
+        } else {
+          ctx.lineTo(x, y);
+        }
+      }
+    });
+
+    ctx.stroke();
+  }
+
+  // Draw humidity (light blue line, thinner, behind)
+  drawLineSeries(humidityNorm, 'rgba(100, 200, 255, 0.6)', 1.5);
+
+  // Draw precipitation probability (blue line)
+  drawLineSeries(precipProbNorm, '#64b5ff', 2);
+
+  // Draw wind speed (yellow line)
+  drawLineSeries(windNorm, '#ffeb3b', 2);
+
+  // Draw temperature (red line, on top)
+  drawLineSeries(tempNorm, '#ef5350', 2.5);
+
+  // Draw temperature points
+  tempNorm.forEach((norm, i) => {
+    if (norm != null && i % 3 === 0) {
       const x = pointWidth / 2 + i * pointWidth;
-      const y = height - padding - ((value - min) / range) * (height - padding * 2);
+      const y = height - padding - norm * chartHeight;
 
-      ctx.fillStyle = color;
+      ctx.fillStyle = '#ef5350';
       ctx.beginPath();
       ctx.arc(x, y, 3, 0, Math.PI * 2);
       ctx.fill();
@@ -684,11 +737,8 @@ function renderHourly(hourly) {
     return;
   }
 
-  // Draw temperature chart
-  const temps = hourly.map(item => item.temperature).filter(t => t != null);
-  if (temps.length > 0) {
-    drawLineChart('hourly-chart', temps, '#ef5350', 'rgba(239, 83, 80, 0.1)');
-  }
+  // Draw multi-series chart
+  drawMultiSeriesChart('hourly-chart', hourly);
 
   // Render hourly cards
   const fragment = document.createDocumentFragment();

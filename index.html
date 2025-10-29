@@ -44,6 +44,13 @@
         <div class="chart-container">
           <canvas class="chart-canvas" id="hourly-chart"></canvas>
         </div>
+        <div class="chart-legend">
+          <div class="legend-item"><span class="legend-color" style="background: #ef5350;"></span>Temp</div>
+          <div class="legend-item"><span class="legend-color" style="background: #64b5ff;"></span>Precip %</div>
+          <div class="legend-item"><span class="legend-color" style="background: rgba(100, 181, 255, 0.3);"></span>Rain</div>
+          <div class="legend-item"><span class="legend-color" style="background: #ffeb3b;"></span>Wind</div>
+          <div class="legend-item"><span class="legend-color" style="background: rgba(100, 200, 255, 0.6);"></span>Humidity</div>
+        </div>
         <div class="hourly" id="hourly-forecast"></div>
       </section>
 
@@ -121,6 +128,6 @@
   </template>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js?v=17" type="module"></script>
+  <script src="app.js?v=18" type="module"></script>
 </body>
 </html>
