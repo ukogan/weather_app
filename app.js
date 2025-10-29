@@ -594,18 +594,21 @@ function drawLineChart(canvasId, data, color, fillColor) {
   const rect = canvas.getBoundingClientRect();
 
   // If canvas has no dimensions, retry after a short delay
-  if (rect.width === 0 || rect.height === 0) {
+  if (rect.height === 0) {
     console.log('Canvas not yet visible, retrying...');
     setTimeout(() => drawLineChart(canvasId, data, color, fillColor), 100);
     return;
   }
 
-  canvas.width = rect.width * 2;
-  canvas.height = rect.height * 2;
+  // Calculate width based on data points (72px per hour to match card width + gap)
+  const pointWidth = 72; // 60px card + 12px gap
+  const width = data.length * pointWidth;
+  const height = rect.height;
+
+  canvas.width = width * 2;
+  canvas.height = height * 2;
   ctx.scale(2, 2);
 
-  const width = rect.width;
-  const height = rect.height;
   const padding = 20;
 
   const min = Math.min(...data);
@@ -629,15 +632,15 @@ function drawLineChart(canvasId, data, color, fillColor) {
   if (fillColor) {
     ctx.fillStyle = fillColor;
     ctx.beginPath();
-    ctx.moveTo(0, height - padding);
+    ctx.moveTo(pointWidth / 2, height - padding);
 
     data.forEach((value, i) => {
-      const x = (i / (data.length - 1)) * width;
+      const x = pointWidth / 2 + i * pointWidth;
       const y = height - padding - ((value - min) / range) * (height - padding * 2);
       ctx.lineTo(x, y);
     });
 
-    ctx.lineTo(width, height - padding);
+    ctx.lineTo(pointWidth / 2 + (data.length - 1) * pointWidth, height - padding);
     ctx.closePath();
     ctx.fill();
   }
@@ -648,7 +651,7 @@ function drawLineChart(canvasId, data, color, fillColor) {
   ctx.beginPath();
 
   data.forEach((value, i) => {
-    const x = (i / (data.length - 1)) * width;
+    const x = pointWidth / 2 + i * pointWidth;
     const y = height - padding - ((value - min) / range) * (height - padding * 2);
 
     if (i === 0) {
@@ -663,7 +666,7 @@ function drawLineChart(canvasId, data, color, fillColor) {
   // Draw points
   data.forEach((value, i) => {
     if (i % 3 === 0) {
-      const x = (i / (data.length - 1)) * width;
+      const x = pointWidth / 2 + i * pointWidth;
       const y = height - padding - ((value - min) / range) * (height - padding * 2);
 
       ctx.fillStyle = color;
@@ -713,6 +716,40 @@ function renderHourly(hourly) {
   });
 
   elements.hourlyForecast.appendChild(fragment);
+
+  // Synchronize scroll between chart and hourly cards
+  syncChartScroll();
+}
+
+function syncChartScroll() {
+  const chartContainer = document.querySelector('.chart-container');
+  const hourlyContainer = elements.hourlyForecast;
+
+  if (!chartContainer || !hourlyContainer) return;
+
+  // Remove existing listeners to avoid duplicates
+  chartContainer.removeEventListener('scroll', onChartScroll);
+  hourlyContainer.removeEventListener('scroll', onHourlyScroll);
+
+  let isChartScrolling = false;
+  let isHourlyScrolling = false;
+
+  function onChartScroll() {
+    if (isHourlyScrolling) return;
+    isChartScrolling = true;
+    hourlyContainer.scrollLeft = chartContainer.scrollLeft;
+    setTimeout(() => { isChartScrolling = false; }, 100);
+  }
+
+  function onHourlyScroll() {
+    if (isChartScrolling) return;
+    isHourlyScrolling = true;
+    chartContainer.scrollLeft = hourlyContainer.scrollLeft;
+    setTimeout(() => { isHourlyScrolling = false; }, 100);
+  }
+
+  chartContainer.addEventListener('scroll', onChartScroll);
+  hourlyContainer.addEventListener('scroll', onHourlyScroll);
 }
 
 function renderDaily(daily) {
