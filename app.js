@@ -35,6 +35,7 @@ function init() {
     currentCondition: document.getElementById('current-condition'),
     currentHiLo: document.getElementById('current-hi-lo'),
     hourlyForecast: document.getElementById('hourly-forecast'),
+    hourlyChart: document.getElementById('hourly-chart'),
     dailyForecast: document.getElementById('daily-forecast'),
     detailsGrid: document.getElementById('details-grid'),
     settingsButton: document.getElementById('settings-button'),
@@ -584,10 +585,21 @@ function renderForecast() {
 
 function drawLineChart(canvasId, data, color, fillColor) {
   const canvas = document.getElementById(canvasId);
-  if (!canvas) return;
+  if (!canvas) {
+    console.error('Canvas not found:', canvasId);
+    return;
+  }
 
   const ctx = canvas.getContext('2d');
   const rect = canvas.getBoundingClientRect();
+
+  // If canvas has no dimensions, retry after a short delay
+  if (rect.width === 0 || rect.height === 0) {
+    console.log('Canvas not yet visible, retrying...');
+    setTimeout(() => drawLineChart(canvasId, data, color, fillColor), 100);
+    return;
+  }
+
   canvas.width = rect.width * 2;
   canvas.height = rect.height * 2;
   ctx.scale(2, 2);
