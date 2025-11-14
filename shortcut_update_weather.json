@@ -1,0 +1,167 @@
+{
+  "name": "Update Weather Data",
+  "actions": [
+    {
+      "type": "text",
+      "text": "https://forecast.weather.gov/MapClick.php?lat=37.48&lon=-122.28&unit=0&lg=english&FcstType=dwml",
+      "note": "Your NWS DWML URL"
+    },
+    {
+      "type": "url.get",
+      "input": "previous",
+      "note": "Fetch the XML data"
+    },
+    {
+      "type": "text.split",
+      "input": "previous",
+      "separator": "<temperature type=\"apparent\"",
+      "note": "Start parsing current temperature"
+    },
+    {
+      "type": "list.get",
+      "input": "previous",
+      "index": "last",
+      "note": "Get the apparent temperature section"
+    },
+    {
+      "type": "text.split",
+      "input": "previous",
+      "separator": "<value>"
+    },
+    {
+      "type": "list.get",
+      "input": "previous",
+      "index": 2
+    },
+    {
+      "type": "text.split",
+      "input": "previous",
+      "separator": "</value>"
+    },
+    {
+      "type": "list.get",
+      "input": "previous",
+      "index": "first",
+      "note": "This is the current temperature"
+    },
+    {
+      "type": "text.combine",
+      "input": "previous",
+      "text": "\u00b0",
+      "note": "Add degree symbol"
+    },
+    {
+      "type": "datajar.set",
+      "key": "weather_current",
+      "value": "previous",
+      "note": "Store in Data Jar"
+    },
+    {
+      "type": "text.split",
+      "input": "url_contents",
+      "separator": "<temperature type=\"maximum\""
+    },
+    {
+      "type": "list.get",
+      "input": "previous",
+      "index": "last"
+    },
+    {
+      "type": "text.split",
+      "input": "previous",
+      "separator": "<value>"
+    },
+    {
+      "type": "list.get",
+      "input": "previous",
+      "index": 2
+    },
+    {
+      "type": "text.split",
+      "input": "previous",
+      "separator": "</value>"
+    },
+    {
+      "type": "list.get",
+      "input": "previous",
+      "index": "first",
+      "variable": "high_temp",
+      "note": "Store as variable"
+    },
+    {
+      "type": "text.split",
+      "input": "url_contents",
+      "separator": "<temperature type=\"minimum\""
+    },
+    {
+      "type": "list.get",
+      "input": "previous",
+      "index": "last"
+    },
+    {
+      "type": "text.split",
+      "input": "previous",
+      "separator": "<value>"
+    },
+    {
+      "type": "list.get",
+      "input": "previous",
+      "index": 2
+    },
+    {
+      "type": "text.split",
+      "input": "previous",
+      "separator": "</value>"
+    },
+    {
+      "type": "list.get",
+      "input": "previous",
+      "index": "first",
+      "variable": "low_temp"
+    },
+    {
+      "type": "text",
+      "text": "H:{high_temp}\u00b0 L:{low_temp}\u00b0",
+      "note": "Format high/low"
+    },
+    {
+      "type": "datajar.set",
+      "key": "weather_hilow",
+      "value": "previous"
+    },
+    {
+      "type": "text.split",
+      "input": "url_contents",
+      "separator": "weather-summary=\""
+    },
+    {
+      "type": "list.get",
+      "input": "previous",
+      "index": 2
+    },
+    {
+      "type": "text.split",
+      "input": "previous",
+      "separator": "\""
+    },
+    {
+      "type": "list.get",
+      "input": "previous",
+      "index": "first"
+    },
+    {
+      "type": "datajar.set",
+      "key": "weather_conditions",
+      "value": "previous"
+    },
+    {
+      "type": "date.current",
+      "format": "h:mm a"
+    },
+    {
+      "type": "datajar.set",
+      "key": "weather_updated",
+      "value": "previous"
+    }
+  ]
+}

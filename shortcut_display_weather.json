@@ -1,0 +1,49 @@
+{
+  "name": "Weather",
+  "actions": [
+    {
+      "type": "datajar.get",
+      "key": "weather_current"
+    },
+    {
+      "type": "variable.set",
+      "name": "temp",
+      "value": "previous"
+    },
+    {
+      "type": "datajar.get",
+      "key": "weather_hilow"
+    },
+    {
+      "type": "variable.set",
+      "name": "hilow",
+      "value": "previous"
+    },
+    {
+      "type": "datajar.get",
+      "key": "weather_conditions"
+    },
+    {
+      "type": "variable.set",
+      "name": "cond",
+      "value": "previous"
+    },
+    {
+      "type": "datajar.get",
+      "key": "weather_updated"
+    },
+    {
+      "type": "variable.set",
+      "name": "updated",
+      "value": "previous"
+    },
+    {
+      "type": "text",
+      "text": "{temp}\n{hilow}\n{cond}\nUpdated: {updated}"
+    },
+    {
+      "type": "show.result",
+      "input": "previous"
+    }
+  ]
+}
