@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Solfege Trainer - Fixed Do vs Movable Do</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <h1 class="header__title">Solfege Trainer</h1>
+      <p class="header__subtitle">Compare Fixed Do and Movable Do Systems</p>
+    </header>
+
+    <main class="main">
+      <!-- Education Panel -->
+      <section class="panel panel--info">
+        <h2 class="panel__title">Understanding Solfege Systems</h2>
+        <div class="info-grid">
+          <div class="info-card info-card--fixed">
+            <h3>Fixed Do</h3>
+            <p>Each syllable corresponds to a specific pitch, regardless of key:</p>
+            <ul>
+              <li><strong>Do</strong> = C (always)</li>
+              <li><strong>Re</strong> = D (always)</li>
+              <li><strong>Mi</strong> = E (always)</li>
+              <li><strong>Fa</strong> = F (always)</li>
+              <li><strong>Sol</strong> = G (always)</li>
+              <li><strong>La</strong> = A (always)</li>
+              <li><strong>Ti</strong> = B (always)</li>
+            </ul>
+            <p class="info-note">Common in France, Italy, Spain, and Latin America</p>
+          </div>
+          <div class="info-card info-card--movable">
+            <h3>Movable Do</h3>
+            <p>Do is always the tonic (1st note) of the current key:</p>
+            <ul>
+              <li><strong>Do</strong> = 1st scale degree (tonic)</li>
+              <li><strong>Re</strong> = 2nd scale degree</li>
+              <li><strong>Mi</strong> = 3rd scale degree</li>
+              <li><strong>Fa</strong> = 4th scale degree</li>
+              <li><strong>Sol</strong> = 5th scale degree</li>
+              <li><strong>La</strong> = 6th scale degree</li>
+              <li><strong>Ti</strong> = 7th scale degree</li>
+            </ul>
+            <p class="info-note">Common in USA, UK, Germany, and for ear training</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Controls Panel -->
+      <section class="panel panel--controls">
+        <h2 class="panel__title">Select a Classical Theme</h2>
+
+        <div class="controls">
+          <div class="control-group">
+            <label for="theme-select">Musical Theme:</label>
+            <select id="theme-select" class="select">
+              <option value="ode-to-joy">Ode to Joy - Beethoven (D Major)</option>
+              <option value="twinkle">Twinkle Twinkle Little Star (C Major)</option>
+              <option value="canon">Canon in D - Pachelbel (D Major)</option>
+              <option value="eine-kleine">Eine Kleine Nachtmusik - Mozart (G Major)</option>
+              <option value="fur-elise">Fur Elise - Beethoven (A Minor)</option>
+              <option value="moonlight">Moonlight Sonata - Beethoven (C# Minor)</option>
+              <option value="spring">Spring - Vivaldi (E Major)</option>
+              <option value="bach-minuet">Minuet in G - Bach (G Major)</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label for="tempo-slider">Tempo: <span id="tempo-value">100</span> BPM</label>
+            <input type="range" id="tempo-slider" class="slider" min="40" max="180" value="100">
+          </div>
+
+          <div class="control-group">
+            <label>Voice Settings:</label>
+            <div class="checkbox-group">
+              <label class="checkbox-label">
+                <input type="checkbox" id="speak-fixed" checked>
+                <span>Speak Fixed Do</span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" id="speak-movable" checked>
+                <span>Speak Movable Do</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="button-group">
+            <button id="play-btn" class="btn btn--primary">
+              <span class="btn__icon">&#9658;</span> Play Theme
+            </button>
+            <button id="stop-btn" class="btn btn--secondary" disabled>
+              <span class="btn__icon">&#9632;</span> Stop
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Piano Visualization -->
+      <section class="panel panel--piano">
+        <h2 class="panel__title">Piano Keyboard</h2>
+        <div class="key-info">
+          <span id="current-key">Key: C Major</span>
+          <span id="current-note">--</span>
+        </div>
+        <div class="piano-container">
+          <div id="piano" class="piano"></div>
+        </div>
+      </section>
+
+      <!-- Note Display -->
+      <section class="panel panel--display">
+        <h2 class="panel__title">Note Comparison</h2>
+        <div class="note-display">
+          <div class="note-column note-column--pitch">
+            <h3>Pitch</h3>
+            <div id="pitch-display" class="note-value">--</div>
+          </div>
+          <div class="note-column note-column--fixed">
+            <h3>Fixed Do</h3>
+            <div id="fixed-do-display" class="note-value">--</div>
+          </div>
+          <div class="note-column note-column--movable">
+            <h3>Movable Do</h3>
+            <div id="movable-do-display" class="note-value">--</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Note History -->
+      <section class="panel panel--history">
+        <h2 class="panel__title">Melody Notes</h2>
+        <div id="note-history" class="note-history">
+          <p class="history-placeholder">Play a theme to see the notes...</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>Learn music theory by comparing solfege systems with classical themes</p>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
