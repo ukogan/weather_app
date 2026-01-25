@@ -779,26 +779,40 @@
         // Input handlers
         function inputStart(e) {
             if (e.type === 'keydown' && e.code !== 'Space') return;
-            e.preventDefault();
+            // Don't trigger jump when clicking buttons
+            if (e.target.classList.contains('btn')) return;
+            // Only prevent default for touch/mouse during game
+            if (game.running && e.type !== 'keydown') {
+                e.preventDefault();
+            }
             game.jumpPressed = true;
         }
 
         function inputEnd(e) {
             if (e.type === 'keyup' && e.code !== 'Space') return;
+            if (e.target.classList.contains('btn')) return;
             game.jumpPressed = false;
         }
 
-        // Event listeners
+        // Event listeners - use document for touch to ensure it works everywhere
         document.addEventListener('keydown', inputStart);
         document.addEventListener('keyup', inputEnd);
-        canvas.addEventListener('mousedown', inputStart);
-        canvas.addEventListener('mouseup', inputEnd);
-        canvas.addEventListener('touchstart', inputStart, { passive: false });
-        canvas.addEventListener('touchend', inputEnd);
+        document.addEventListener('mousedown', inputStart);
+        document.addEventListener('mouseup', inputEnd);
+        document.addEventListener('touchstart', inputStart, { passive: false });
+        document.addEventListener('touchend', inputEnd);
 
-        document.getElementById('startBtn').addEventListener('click', startGame);
-        document.getElementById('retryBtn').addEventListener('click', retry);
-        document.getElementById('playAgainBtn').addEventListener('click', playAgain);
+        // Button listeners with touch support
+        const startBtn = document.getElementById('startBtn');
+        const retryBtn = document.getElementById('retryBtn');
+        const playAgainBtn = document.getElementById('playAgainBtn');
+
+        startBtn.addEventListener('click', startGame);
+        startBtn.addEventListener('touchend', (e) => { e.stopPropagation(); startGame(); });
+        retryBtn.addEventListener('click', retry);
+        retryBtn.addEventListener('touchend', (e) => { e.stopPropagation(); retry(); });
+        playAgainBtn.addEventListener('click', playAgain);
+        playAgainBtn.addEventListener('touchend', (e) => { e.stopPropagation(); playAgain(); });
 
         // Initialize
         window.addEventListener('resize', resizeCanvas);
