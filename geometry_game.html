@@ -486,14 +486,15 @@
         // Draw player
         function drawPlayer() {
             const p = game.player;
-            const screenX = p.x - game.cameraX;
+            // Player stays at fixed screen X position
+            const screenX = p.x;
 
             // Trail
             p.trail.forEach((pos, i) => {
                 const alpha = (i / p.trail.length) * 0.25;
                 ctx.globalAlpha = alpha;
                 ctx.fillStyle = COLORS.player;
-                ctx.fillRect(pos.x - game.cameraX, pos.y, p.size, p.size);
+                ctx.fillRect(p.x - (p.trail.length - i) * 3, pos.y, p.size, p.size);
             });
             ctx.globalAlpha = 1;
 
@@ -611,20 +612,21 @@
         // Check collision between player and obstacle
         function checkCollision(obs) {
             const p = game.player;
-            const obsX = obs.x - game.cameraX + p.x;
+            // Obstacle screen position
+            const obsScreenX = obs.x - game.cameraX;
 
             if (obs.type === 'spike') {
                 // Tighter triangle hitbox
                 const padding = 12;
-                return p.x < obsX + obs.width - padding &&
-                       p.x + p.size > obsX + padding &&
+                return p.x < obsScreenX + obs.width - padding &&
+                       p.x + p.size > obsScreenX + padding &&
                        p.y + p.size > obs.y + padding &&
                        p.y < obs.y + obs.height;
             }
 
             // Block collision
-            return p.x < obsX + obs.width &&
-                   p.x + p.size > obsX &&
+            return p.x < obsScreenX + obs.width &&
+                   p.x + p.size > obsScreenX &&
                    p.y < obs.y + obs.height &&
                    p.y + p.size > obs.y;
         }
