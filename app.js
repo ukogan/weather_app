@@ -493,16 +493,16 @@ function daylightVals(sun) {
   return { kicker: kicker, big: sun.set, cap: 'Sunset' };
 }
 
-function buildChart() {
+function buildChart(targetW) {
   const d = state.d, S = state.series, zoom = state.zoom;
   // The zoom is a real time window: show exactly the next N hours and fit them
-  // to the screen width, so "12h/24h/48h" matches what's on screen (and the
-  // title), instead of just changing point spacing on a 48-hour scroll.
+  // to the chart's container width, so "12h/24h/48h" matches what's on screen
+  // (and the title), instead of just changing point spacing on a 48-hour scroll.
   const N = Math.max(2, Math.min(zoom, d.hours.length));
   const hours = d.hours.slice(0, N);
   const L = 30, R = 14, plotTop = 14, plotH = 118, baseline = plotTop + plotH;
-  const colW = Math.min((typeof window !== 'undefined' && window.innerWidth) || 390, 430) - 44;
-  const w = Math.max(colW, 240);
+  const fallback = Math.min((typeof window !== 'undefined' && window.innerWidth) || 390, 430) - 44;
+  const w = Math.max(targetW || fallback, 240);
   const PX = (w - L - R) / (N - 1);
 
   const temps = hours.map(h => h.temp);
@@ -588,6 +588,16 @@ function chartSVG(c) {
   s += c.ticks.map(tk => `<line x1="${tk.x}" x2="${tk.x}" y1="132" y2="137" stroke="rgba(32,30,29,.35)" stroke-width="1"></line><text x="${tk.x}" y="150" fill="#605d5d" font-size="10" font-weight="600" text-anchor="middle">${tk.label}</text><text x="${tk.x}" y="164" fill="${tk.subColor}" font-size="9" font-weight="600" text-anchor="middle">${tk.sub}</text>`).join('');
   s += `</svg>`;
   return s;
+}
+
+// Resize the chart SVG to its actual container width (the content column is
+// wider in the landscape/two-column layout than the phone column).
+function fitChart() {
+  const box = document.getElementById('fc-chart-scroll');
+  if (!box) return;
+  const w = box.clientWidth;
+  if (!w) return;
+  box.innerHTML = chartSVG(buildChart(w));
 }
 
 function renderForecast() {
@@ -718,6 +728,7 @@ function renderForecast() {
   const discToggle = secs.length > 1 ? `<button class="disc-toggle" id="disc-toggle" type="button">${state.expanded ? 'Show less' : 'Read full discussion'}</button>` : '';
 
   scr.innerHTML = `<div class="forecast__inner">
+    <div class="fc-identity">
     <header class="fc-header">
       <button id="fc-open-picker" type="button" title="Change location" style="background:transparent;border:none;padding:0;text-align:left;cursor:pointer;color:inherit;font:inherit;">
         <div class="kicker">${esc(sourceLabel)}</div>
@@ -741,14 +752,17 @@ function renderForecast() {
     </div>
 
     <div class="fc-headline"><div class="fc-headline__bar"></div><div class="fc-headline__text">${esc(d.headline)}</div></div>
+    </div>
 
-    <section class="fc-section">
+    <div class="fc-content">
+    <section class="fc-section fc-chart">
       <div class="chart-head"><span class="chart-title">Next ${chart.span} Hours</span><div class="zoom">${zoomBtns}</div></div>
       <div class="series">${chips}</div>
-      <div class="scrollx">${chartSVG(chart)}</div>
+      <div class="scrollx" id="fc-chart-scroll">${chartSVG(chart)}</div>
       <div class="scrollx hour-strip">${hourCells}</div>
     </section>
 
+    <div class="fc-twoup">
     <section class="fc-section">
       <div class="section-head">7-Day Forecast</div>
       ${dayRows}
@@ -759,15 +773,17 @@ function renderForecast() {
       ${windCard}
       <div class="cards-grid">${humCard}${aqiCard}${uvCard}${daylightCard}</div>
     </section>
+    </div>
 
-    <section class="fc-section">
+    <section class="fc-section fc-disc">
       <div class="section-head">${esc(discLabel)}</div>
-      ${discParas}
+      <div class="disc-flow">${discParas}</div>
       ${discToggle}
       <div class="disc-meta">${discMeta}</div>
     </section>
 
     <div class="footnote">Forecast &amp; discussion: NWS api.weather.gov. UV, daylight &amp; AQI: Open-Meteo (not in the NWS feed).</div>
+    </div>
   </div>`;
 
   // events
@@ -778,6 +794,7 @@ function renderForecast() {
   if (dt) dt.addEventListener('click', () => { state.expanded = !state.expanded; renderForecast(); });
   scr.querySelectorAll('.zoom__btn').forEach(b => b.addEventListener('click', () => { state.zoom = +b.dataset.zoom; renderForecast(); }));
   scr.querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => toggleSeries(b.dataset.series)));
+  fitChart();
 }
 
 function toggleSeries(k) {
@@ -1201,7 +1218,14 @@ function showScreen(name) {
   document.getElementById('forecast-screen').hidden = name !== 'forecast';
   document.getElementById('location-screen').hidden = name !== 'location';
   window.scrollTo(0, 0);
+  if (name === 'forecast' && typeof requestAnimationFrame === 'function') requestAnimationFrame(fitChart);
 }
+
+let _resizeT = null;
+window.addEventListener('resize', () => {
+  clearTimeout(_resizeT);
+  _resizeT = setTimeout(() => { if (!document.getElementById('forecast-screen').hidden) fitChart(); }, 150);
+});
 
 async function init() {
   // Seed the saved list on first run so it isn't empty.
