@@ -1,152 +1,109 @@
 # Weather App Architecture
 
-## Architecture Change Counter: 0
+## Architecture Change Counter: 1
 
 ## Overview
-A lightweight, client-side weather application that displays NWS (National Weather Service) forecast data using the DWML (Digital Weather Markup Language) XML format.
+A lightweight, client-side weather app that displays National Weather Service
+forecasts in the **Modernist** design system — flat, architectural, set in
+Archivo, near-mono red on a light ground, zero corner radius and strong 2px
+rules. Data carries meteorological hue; chrome stays ink + red.
+
+The app runs entirely in the browser with no backend and no build step, in
+keeping with its "Weather with Privacy" premise: no account, no tracking, no
+location leaving the device.
 
 ## Tech Stack
-- **Language**: Vanilla JavaScript (ES6+)
+- **Language**: Vanilla JavaScript (ES2020+)
 - **Runtime**: Browser (no build process)
-- **Data Source**: National Weather Service DWML API
-- **Styling**: CSS3 with CSS custom properties
-- **Markup**: HTML5
+- **Data**: NWS `api.weather.gov` (JSON) + Open-Meteo (JSON)
+- **Map**: Leaflet 1.9.4 + OpenStreetMap tiles (no API key)
+- **Styling**: CSS3 with custom-property design tokens
+- **Fonts / icons**: Archivo (Google Fonts); hand-drawn SVG weather glyphs
 
 ## Core Architecture
 
-### Frontend-Only Application
-This is a pure client-side application with no backend server. All code runs in the browser.
+Pure client-side; all code runs in the browser.
 
-**Files:**
-- `index.html` - Main HTML structure and templates
-- `app.js` - All application logic and data processing
-- `styles.css` - All styling and theming
-- `sample_dwml.xml` - Sample data for testing/reference
+**Files**
+- `index.html` — screen containers (splash, forecast, picker) + asset links
+- `app.js` — data layer, normalization, SVG generation, rendering, navigation
+- `styles.css` — Modernist tokens and component styles
 
-### Data Flow
+### Screens
+1. **Splash** — first-run loading screen: full-color rainbow photograph,
+   "Weather with Privacy" wordmark, animated progress bar. Revealed to the
+   forecast once data resolves (min display time so it never flashes).
+2. **Forecast** — the main screen. One scroll: header, conditional alert
+   banner, current conditions, narrative headline, toggleable hourly chart,
+   7-day forecast, four data-driven condition cards + wind compass, NWS Area
+   Forecast Discussion, data-source footnote.
+3. **Location picker** — list view (search, saved locations, GPS) ⇄ map view
+   (fixed crosshair over a draggable map, live NWS grid-cell lookup).
+
+### Data flow
 ```
-User → Browser → NWS DWML API → XML Response → Parser → Render
-```
-
-1. App loads with default forecast URL (San Mateo, CA)
-2. Fetches XML from NWS DWML endpoint via browser fetch API
-3. Parses XML using browser DOMParser
-4. Transforms DWML structure into app data model
-5. Renders forecast data to DOM using templates
-
-### Key Components
-
-**State Management** (app.js:5-8)
-- Single `state` object holds:
-  - `forecastUrl`: Current NWS API endpoint
-  - `data`: Parsed forecast data
-
-**Element References** (app.js:10-26)
-- Cached DOM references stored in `elements` object
-- Avoids repeated querySelector calls
-
-**XML Parsing** (app.js:91-131)
-- `parseDwmlForecast()` - Main parser function
-- Extracts location, current conditions, hourly/daily forecasts, details
-- Uses helper functions to build structured data from DWML XML
-
-**Rendering** (app.js:324-414)
-- Template-based rendering using `<template>` elements
-- Document fragments for efficient DOM manipulation
-- Separate render functions for each UI section
-
-## Features
-
-### Current Implementation
-1. **Current Conditions Display** - Shows temp, condition, hi/lo
-2. **Hourly Forecast** - Next 12 periods with temps and icons
-3. **10-Day Forecast** - Daily highs/lows with weather icons
-4. **Detail Tiles** - Feels like, humidity, dew point, wind, visibility, pressure, precipitation chance
-5. **Custom Location** - Settings dialog to change forecast URL
-6. **Dark/Light Mode** - Automatic based on system preference
-
-## Data Schema
-
-### DWML Input Format
-NWS provides XML with:
-- `<data type="forecast">` - Main forecast data
-- `<data type="current observations">` - Current conditions
-- `<time-layout>` - Time series definitions
-- `<parameters>` - Temperature, weather, icons, precipitation
-
-### Internal Data Model
-
-**Current Observation:**
-```javascript
-{
-  temperature: number,
-  condition: string,
-  icon: string,
-  dewPoint: number,
-  humidity: number,
-  pressure: number,
-  visibility: number,
-  observationTime: Date,
-  wind: {
-    directionDegrees: number,
-    speedKnots: number,
-    gustKnots: number
-  },
-  hiLo: {
-    high: number,
-    low: number
-  }
-}
+Splash → loadForecast(location)
+  ├─ Open-Meteo daily (sunrise/sunset/UV)   ← fetched first: sun times drive
+  │                                            day/night icon selection
+  ├─ api.weather.gov/points → forecastHourly, forecast, cwa
+  ├─ api.weather.gov AFD product (Area Forecast Discussion)
+  ├─ api.weather.gov/alerts/active (alert banner)
+  └─ Open-Meteo air-quality (US AQI)
+→ normalized `d` → renderForecast() → reveal
 ```
 
-**Hourly Forecast Item:**
-```javascript
-{
-  label: string,
-  temperature: number,
-  icon: string,
-  summary: string,
-  precipitationChance: number
-}
-```
+Every fetch is individually caught. A failure leaves that slice at its sample
+value and degrades the honesty label (`Sample data`, `Forecast Discussion —
+sample`) — nothing throws, the screen always renders. Partial NWS outages are
+common, so this is deliberate.
 
-**Daily Forecast Item:**
-```javascript
-{
-  label: string,
-  periodName: string,
-  high: number,
-  low: number,
-  icon: string,
-  summary: string,
-  precipitationChanceDay: number,
-  precipitationChanceNight: number
-}
-```
+### Interaction state (forecast)
+- `zoom` — 12h / 24h / 48h; sets chart point spacing and tick step.
+- `series` — `{temp, feels, precip, wind, hum}` toggles; at least one stays on.
+- `expanded` — collapses the discussion to its first AFD section.
 
-## APIs Used
-- **NWS DWML Forecast API**: `forecast.weather.gov/MapClick.php?lat={lat}&lon={lon}&unit=0&lg=english&FcstType=dwml`
-  - Returns XML format weather data
-  - No API key required
-  - Public government data
+Changing any of these re-derives from the already-fetched data — no refetch.
 
-## Error Handling
-- Network failures show error message in UI
-- XML parsing errors caught and displayed
-- Missing data returns null/empty states
-- Visual fallbacks for missing icons/values
+## Normalization (ported, encodes real API edge cases)
+- **Apparent temperature** — NWS heat-index polynomial ≥80°F w/ humidity; NWS
+  wind-chill ≤50°F w/ wind >3 mph; else the plain temperature.
+- **Icons** — `shortForecast` matched case-insensitively; day/night from the
+  actual sunrise/sunset evaluated at each period's midpoint (not its start).
+- **Daily pairing** — walk every period; a daytime period opens a day, the
+  following night fills its low; a leading night becomes a `Tonight` row.
+- **AFD parsing** — pull `KEY MESSAGES / SYNOPSIS / SHORT TERM / LONG TERM /
+  DISCUSSION`; end on a blank line + `.SECTION`, or `&&` / `$$`; split
+  paragraphs and `- ` bullets; collapse hard-wrapped lines.
+- **Wind** — first integer of the `"5 to 10 mph"` string; gusts checked for
+  km/h vs mph via `unitCode`; direction indexed into the 16-point compass.
 
-## Browser Compatibility
-- Requires ES6+ support (fetch, arrow functions, template literals, async/await)
-- Uses DOMParser for XML parsing
-- Uses `<dialog>` element for settings
-- Uses CSS custom properties
-- Uses Intl.DateTimeFormat for date/time formatting
+## Color system
+Chrome is Modernist ink (`#201e1d`) + accent red (`#ec3013`). Anything
+encoding a measurement takes a meteorological color:
+- **Temperature ramp** — 9-stop piecewise-linear sRGB interpolation drives the
+  chart gradient, the now-dot and the 7-day range bars. `tempInk()` (ramp
+  darkened toward ink) drives all temperature *text* for legibility.
+- **UV / AQI** — banded color scales.
+- **Humidity / precip / wind** — fixed blues and slate.
 
-## Known Limitations
-- No offline support
-- No data caching
-- CORS limitations (relies on NWS allowing cross-origin requests)
-- No user location detection (requires manual URL input)
-- No historical data
-- No weather alerts
+## APIs used
+- `api.weather.gov/points/{lat},{lon}` → grid + `forecast`, `forecastHourly`
+- `api.weather.gov/products/types/AFD/locations/{cwa}` → discussion
+- `api.weather.gov/alerts/active?point={lat},{lon}` → alert banner
+- Open-Meteo `forecast` (UV, sunrise/sunset) and `air-quality` (US AQI) —
+  none of which are in the NWS feed
+- Nominatim (OpenStreetMap) for search geocoding
+- NWS asks for a descriptive `User-Agent`; browsers forbid setting that header
+  from `fetch()`, so requests are served without one.
+
+## Persistence
+`localStorage` only — the active location (`ww_location`) and saved locations
+(`ww_saved`). Nothing leaves the device.
+
+## Known limitations / next steps
+- Landscape/wide two-column reflow is specified in the design but not yet built
+  (portrait is faithful and centered on wide viewports).
+- Open-Meteo's US AQI is a model estimate; EPA AirNow is authoritative but
+  needs an API key.
+- Accessibility: series chips / zoom need real toggle semantics; the chart
+  needs a text alternative; the map needs a keyboard path to set coordinates.
