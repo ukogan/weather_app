@@ -241,8 +241,8 @@ const SAMPLE = {
   wind: { speed: 5, gust: 11, dir: 283, dirLabel: '283° WNW' },
   hum: { value: 83, dew: 54 },
   aqi: { value: 34, label: 'Good' },
-  uv: { value: 2, label: 'Low' },
-  sun: { rise: '6:07 AM', set: '8:23 PM', frac: 0.14 },
+  uv: { value: 2, label: 'Low', max: 5 },
+  sun: { rise: '6:07 AM', set: '8:23 PM', frac: 0.14, riseH: 6.12, setH: 20.38 },
   hours: genHours({ hi: 72, lo: 53, startHour: 8, riseHour: 6, setHour: 20, hum: 70, humSlope: 1.1, wind: 5, dayIcon: 'partly', nightIcon: 'moon' }),
   daily: genDaily({ hi: 72, lo: 53, drift: [0, 1, 0, -3, 2, -1, 0], dayIcon: 'sun', dayPops: [0, 0, 0, 20, 0, 30, 0], dayIcons: ['sun', 'sun', 'partly', 'cloud', 'sun', 'rain', 'sun'] }),
   discussion: {
@@ -280,14 +280,19 @@ async function loadForecast(loc) {
   let riseH = 6.5, setH = 19.5;
 
   try {
-    const om = await fetch('https://api.open-meteo.com/v1/forecast?latitude=' + loc.lat + '&longitude=' + loc.lon + '&daily=uv_index_max,sunrise,sunset&timezone=auto&forecast_days=1').then(r => r.json());
+    const om = await fetch('https://api.open-meteo.com/v1/forecast?latitude=' + loc.lat + '&longitude=' + loc.lon + '&daily=uv_index_max,sunrise,sunset&current=uv_index&timezone=auto&forecast_days=1').then(r => r.json());
     if (om.daily) {
-      const uvv = om.daily.uv_index_max[0];
-      if (uvv != null) { d.uv.value = Math.round(uvv * 10) / 10; d.uv.label = uvLabel(uvv); }
+      const uvMax = om.daily.uv_index_max[0];
+      // Current UV drives the value (0 at night); the daily peak becomes context.
+      const uvNow = om.current && om.current.uv_index;
+      if (uvMax != null) d.uv.max = Math.round(uvMax);
+      if (uvNow != null) { d.uv.value = Math.round(uvNow); d.uv.label = uvLabel(uvNow); }
+      else if (uvMax != null) { d.uv.value = Math.round(uvMax); d.uv.label = uvLabel(uvMax); }
       const rise = new Date(om.daily.sunrise[0]), set = new Date(om.daily.sunset[0]);
       riseH = rise.getHours() + rise.getMinutes() / 60;
       setH = set.getHours() + set.getMinutes() / 60;
       d.sun.rise = fmtTime(rise); d.sun.set = fmtTime(set);
+      d.sun.riseH = riseH; d.sun.setH = setH;
       d.sun.frac = Math.max(0, Math.min(1, (Date.now() - rise.getTime()) / (set.getTime() - rise.getTime())));
     }
   } catch (e) { /* keep sample */ }
@@ -470,12 +475,35 @@ function sunGfx(sun) {
     glow: +(0.34 * (1 - Math.min(1, elev / 0.5))).toFixed(2)
   };
 }
+// Daylight card copy: describe the current sun state, and point the big number
+// at the NEXT event (sunrise or sunset) rather than always showing sunset.
+function daylightVals(sun) {
+  if (sun.riseH == null || sun.setH == null) return { kicker: 'Daylight', big: sun.set, cap: 'Sunset' };
+  const now = new Date();
+  const nowH = now.getHours() + now.getMinutes() / 60;
+  const riseH = sun.riseH, setH = sun.setH;
+  if (nowH < riseH) {
+    return { kicker: (riseH - nowH) <= 1.5 ? 'Almost dawn' : 'Before dawn', big: sun.rise, cap: 'Sunrise' };
+  }
+  if (nowH >= setH) {
+    return { kicker: (nowH - setH) <= 1 ? 'Just after sunset' : 'After dark', big: sun.rise, cap: 'Sunrise' };
+  }
+  const f = (nowH - riseH) / Math.max(0.01, setH - riseH);
+  const kicker = f < 0.15 ? 'Daybreak' : f < 0.4 ? 'Morning' : f < 0.55 ? 'Midday' : f < 0.75 ? 'Midafternoon' : f < 0.9 ? 'Late afternoon' : 'Approaching sunset';
+  return { kicker: kicker, big: sun.set, cap: 'Sunset' };
+}
+
 function buildChart() {
   const d = state.d, S = state.series, zoom = state.zoom;
-  const hours = d.hours;
-  const PX = zoom === 12 ? 44 : zoom === 24 ? 24 : 13;
+  // The zoom is a real time window: show exactly the next N hours and fit them
+  // to the screen width, so "12h/24h/48h" matches what's on screen (and the
+  // title), instead of just changing point spacing on a 48-hour scroll.
+  const N = Math.max(2, Math.min(zoom, d.hours.length));
+  const hours = d.hours.slice(0, N);
   const L = 30, R = 14, plotTop = 14, plotH = 118, baseline = plotTop + plotH;
-  const w = L + (hours.length - 1) * PX + R;
+  const colW = Math.min((typeof window !== 'undefined' && window.innerWidth) || 390, 430) - 44;
+  const w = Math.max(colW, 240);
+  const PX = (w - L - R) / (N - 1);
 
   const temps = hours.map(h => h.temp);
   const feels = hours.map(h => h.feels == null ? h.temp : h.feels);
@@ -580,7 +608,8 @@ function renderForecast() {
   const zoomBtns = [12, 24, 48].map(z => `<button class="zoom__btn ${state.zoom === z ? 'is-on' : ''}" data-zoom="${z}" type="button">${z}h</button>`).join('');
   const chips = SERIES_DEFS.map(o => `<button class="chip ${S[o.key] ? 'is-on' : ''}" data-series="${o.key}" type="button"><span class="chip__swatch" style="border-top:${o.swatch}"></span>${o.label}</button>`).join('');
 
-  const hourCells = d.hours.map(h => `<div class="hour-cell"><span class="hour-cell__label">${esc(h.label)}</span>${wxIcon(h.icon, 21)}<span class="hour-cell__temp" style="color:${tempInk(h.temp)}">${h.temp}°</span><span class="hour-cell__pop">${h.pop >= 10 ? h.pop + '%' : ''}</span></div>`).join('');
+  const chart = buildChart();
+  const hourCells = d.hours.slice(0, chart.span).map(h => `<div class="hour-cell"><span class="hour-cell__label">${esc(h.label)}</span>${wxIcon(h.icon, 21)}<span class="hour-cell__temp" style="color:${tempInk(h.temp)}">${h.temp}°</span><span class="hour-cell__pop">${h.pop >= 10 ? h.pop + '%' : ''}</span></div>`).join('');
 
   const dayRows = d.daily.map(x => {
     const hasHi = x.hi != null;
@@ -655,19 +684,20 @@ function renderForecast() {
       ${uv.rays.map(r => `<line x1="${r.x1}" y1="${r.y1}" x2="${r.x2}" y2="${r.y2}" stroke="${uv.color}" stroke-opacity="${uv.rayOpacity}" stroke-width="${uv.rayWidth}" stroke-linecap="round"></line>`).join('')}
       <circle cx="30" cy="25" r="${uv.r}" fill="${uv.color}" fill-opacity="${uv.fillOpacity}" stroke="${uv.color}" stroke-width="2.2"></circle>
     </svg>
-    <div class="card__caption">${esc(d.uv.label)} · peak today</div>
+    <div class="card__caption">${esc(d.uv.label)}${d.uv.max != null ? ' · peak ' + d.uv.max + ' today' : ''}</div>
   </div>`;
 
+  const day = daylightVals(d.sun);
   const daylightCard = `<div class="card card--metric card--daylight">
-    <div class="card__kicker">Daylight</div>
-    <div class="card__value">${esc(sun.set)}</div>
+    <div class="card__kicker">${esc(day.kicker)}</div>
+    <div class="card__value">${esc(day.big)}</div>
     <svg viewBox="0 0 124 44">
       <path d="M 14,34 A 48,26 0 0 1 110,34" fill="none" stroke="rgba(32,30,29,.2)" stroke-width="1.5" stroke-dasharray="2 3"></path>
       <line x1="10" y1="34" x2="114" y2="34" stroke="#201e1d" stroke-width="2"></line>
       <circle cx="${sun.x}" cy="${sun.y}" r="10" fill="${sun.color}" fill-opacity="${sun.glow}"></circle>
       <circle cx="${sun.x}" cy="${sun.y}" r="5" fill="${sun.color}"></circle>
     </svg>
-    <div class="card__caption">Sunrise ${esc(sun.rise)}</div>
+    <div class="card__caption">${esc(day.cap)}</div>
   </div>`;
 
   // discussion
@@ -693,7 +723,10 @@ function renderForecast() {
         <div class="kicker">${esc(sourceLabel)}</div>
         <div class="fc-place">${esc(d.place)}</div>
       </button>
-      <button class="icon-btn" id="fc-refresh" type="button" title="Refresh" aria-label="Refresh forecast">${REFRESH_SVG}</button>
+      <div class="fc-header__actions">
+        <button class="icon-btn" id="fc-locations" type="button" title="Locations" aria-label="Change location">${PIN_SVG}</button>
+        <button class="icon-btn" id="fc-refresh" type="button" title="Refresh" aria-label="Refresh forecast">${REFRESH_SVG}</button>
+      </div>
     </header>
 
     ${d.region ? `<div class="fc-alert">${ALERT_SVG}<span>${esc(d.region)}</span></div>` : ''}
@@ -710,9 +743,9 @@ function renderForecast() {
     <div class="fc-headline"><div class="fc-headline__bar"></div><div class="fc-headline__text">${esc(d.headline)}</div></div>
 
     <section class="fc-section">
-      <div class="chart-head"><span class="chart-title">Next ${d.hours.length} Hours</span><div class="zoom">${zoomBtns}</div></div>
+      <div class="chart-head"><span class="chart-title">Next ${chart.span} Hours</span><div class="zoom">${zoomBtns}</div></div>
       <div class="series">${chips}</div>
-      <div class="scrollx">${chartSVG(buildChart())}</div>
+      <div class="scrollx">${chartSVG(chart)}</div>
       <div class="scrollx hour-strip">${hourCells}</div>
     </section>
 
@@ -739,6 +772,7 @@ function renderForecast() {
 
   // events
   document.getElementById('fc-open-picker').addEventListener('click', openPicker);
+  document.getElementById('fc-locations').addEventListener('click', openPicker);
   document.getElementById('fc-refresh').addEventListener('click', () => refresh());
   const dt = document.getElementById('disc-toggle');
   if (dt) dt.addEventListener('click', () => { state.expanded = !state.expanded; renderForecast(); });
@@ -773,6 +807,7 @@ const picker = {
 };
 
 const PIN_SVG = `<svg viewBox="0 0 24 24" style="width:17px;height:17px;" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 21.5s7-6.2 7-11.5a7 7 0 1 0-14 0c0 5.3 7 11.5 7 11.5Z"></path><circle cx="12" cy="10" r="2.4"></circle></svg>`;
+const CHEVRON_SVG = `<svg viewBox="0 0 24 24" style="width:16px;height:16px;display:block;" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9,5 16,12 9,19"></polyline></svg>`;
 const HOME_SVG = `<svg viewBox="0 0 24 24" style="width:14px;height:14px;" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M4 11.2 12 4.5l8 6.7V20H4Z"></path></svg>`;
 const CROSSHAIR_SVG = `<svg viewBox="0 0 56 56" style="width:56px;height:56px;display:block;">
   <line x1="28" y1="0" x2="28" y2="19" stroke="#f3f2f2" stroke-width="4"></line><line x1="28" y1="37" x2="28" y2="56" stroke="#f3f2f2" stroke-width="4"></line><line x1="0" y1="28" x2="19" y2="28" stroke="#f3f2f2" stroke-width="4"></line><line x1="37" y1="28" x2="56" y2="28" stroke="#f3f2f2" stroke-width="4"></line>
@@ -798,13 +833,18 @@ function buildListView() {
       <button class="search__clear" id="pk-clear" type="button" title="Clear" aria-label="Clear search" hidden><svg viewBox="0 0 24 24" style="width:16px;height:16px;" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"></line><line x1="18" y1="6" x2="6" y2="18"></line></svg></button>
     </div>
 
+    <button class="use-current map-entry" id="pk-map" type="button">
+      <span class="use-current__icon">${PIN_SVG}</span>
+      <span class="use-current__label">Set location on the map</span>
+      <span class="use-current__note">${CHEVRON_SVG}</span>
+    </button>
+
     <div id="pk-results" hidden></div>
     <div id="pk-saved"></div>
-
-    <div class="footnote">NWS forecasts resolve to a 2.5&nbsp;km grid cell. A pin dropped on your street gives a different cell — and often a different forecast — than one on the city centroid. Search gets you close; the map gets you exact.</div>
   </div>`;
 
   document.getElementById('pk-add').addEventListener('click', () => openMapNew());
+  document.getElementById('pk-map').addEventListener('click', () => openMapNew());
   const input = document.getElementById('pk-search');
   const clear = document.getElementById('pk-clear');
   input.addEventListener('input', () => {
