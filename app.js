@@ -1,1079 +1,1185 @@
-const DEFAULT_LAT = 37.4718;
-const DEFAULT_LON = -122.2695;
-const HOUR_FORMAT = new Intl.DateTimeFormat('en-US', { hour: 'numeric' });
-const DAY_FORMAT = new Intl.DateTimeFormat('en-US', { weekday: 'short' });
-const TEMP_MIN = -20;
-const TEMP_MAX = 120;
+/* ============================================================================
+   Weather with Privacy — Modernist redesign.
 
-const state = {
-  location: JSON.parse(localStorage.getItem('weather_location')) || { lat: DEFAULT_LAT, lon: DEFAULT_LON },
-  data: null,
-  loadStartTime: Date.now(),
+   Vanilla JS, no build step, runs entirely in the browser.
+   Data: NWS api.weather.gov (forecast, hourly, Area Forecast Discussion, alerts)
+   plus Open-Meteo for UV, sun times and AQI — none of which are in the NWS feed.
+
+   Color ramps, iconFor/apparent/gustMph and the AFD parser are ported verbatim
+   from the design handoff: they encode real edge cases hit against the live API.
+   NOTE: api.weather.gov asks for a descriptive User-Agent, but browsers forbid
+   setting that header from fetch(); it is served without one here.
+   ========================================================================== */
+
+'use strict';
+
+const DEFAULT_LOCATION = { lat: 37.4655, lon: -122.2758, name: 'Emerald Hills' };
+const MIN_SPLASH_MS = 1500;
+
+/* ---- color scales: data gets meteorological hue; chrome stays ink + red ---- */
+const INK = [32, 30, 29];
+function hex2rgb(h) { return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; }
+function rgb2hex(c) { return '#' + c.map(v => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, '0')).join(''); }
+function mix(a, b, t) { return a.map((v, i) => v + (b[i] - v) * t); }
+function darken(hex, t) { return rgb2hex(mix(hex2rgb(hex), INK, t)); }
+
+const TEMP_STOPS = [
+  [-30, '#7b4fa8'], [0, '#3560ad'], [32, '#4d9de0'], [45, '#3fa9a0'],
+  [58, '#63ac54'], [70, '#d9bb37'], [82, '#e8912e'], [95, '#d9482a'], [112, '#a8236b']
+];
+function tempColor(v) {
+  if (v == null) return '#8b8590';
+  const s = TEMP_STOPS;
+  if (v <= s[0][0]) return s[0][1];
+  if (v >= s[s.length - 1][0]) return s[s.length - 1][1];
+  for (let i = 0; i < s.length - 1; i++) {
+    if (v >= s[i][0] && v <= s[i + 1][0]) {
+      const t = (v - s[i][0]) / (s[i + 1][0] - s[i][0]);
+      return rgb2hex(mix(hex2rgb(s[i][1]), hex2rgb(s[i + 1][1]), t));
+    }
+  }
+  return s[s.length - 1][1];
+}
+function tempInk(v) { return darken(tempColor(v), 0.34); }
+
+function uvColor(v) {
+  if (v < 3) return '#3d9c57';
+  if (v < 6) return '#d9bb37';
+  if (v < 8) return '#e8912e';
+  if (v < 11) return '#d9482a';
+  return '#7b4fa8';
+}
+function aqiColor(v) {
+  if (v <= 50) return '#3d9c57';
+  if (v <= 100) return '#d9bb37';
+  if (v <= 150) return '#e8912e';
+  if (v <= 200) return '#d9482a';
+  if (v <= 300) return '#7b4fa8';
+  return '#7a1f2b';
+}
+
+const DIRS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+const c2f = c => c == null ? null : c * 9 / 5 + 32;
+
+function isDayAt(date, riseH, setH) {
+  const h = date.getHours() + date.getMinutes() / 60;
+  return h >= riseH && h < setH;
+}
+function hourLabel(hr) {
+  const ap = hr < 12 ? 'AM' : 'PM';
+  let h = hr % 12; if (h === 0) h = 12;
+  return h + ' ' + ap;
+}
+function iconFor(text, isDay) {
+  const t = (text || '').toLowerCase();
+  if (/snow|sleet|flurr|wintry|ice pellets/.test(t)) return 'snow';
+  if (/thunder|storm|rain|shower|drizzle/.test(t)) return 'rain';
+  if (/fog|haze|mist|smoke/.test(t)) return 'fog';
+  if (/(mostly|partly) cloudy|partly sunny|few clouds|scattered clouds/.test(t)) return isDay ? 'partly' : 'partly-night';
+  if (/cloud|overcast/.test(t)) return 'cloud';
+  return isDay ? 'sun' : 'moon';
+}
+function apparent(tF, rh, mph) {
+  if (tF == null) return null;
+  if (tF >= 80 && rh != null) {
+    const T = tF, R = rh;
+    return Math.round(-42.379 + 2.04901523 * T + 10.14333127 * R - 0.22475541 * T * R
+      - 0.00683783 * T * T - 0.05481717 * R * R + 0.00122874 * T * T * R
+      + 0.00085282 * T * R * R - 0.00000199 * T * T * R * R);
+  }
+  if (tF <= 50 && mph > 3) {
+    return Math.round(35.74 + 0.6215 * tF - 35.75 * Math.pow(mph, 0.16) + 0.4275 * tF * Math.pow(mph, 0.16));
+  }
+  return Math.round(tF);
+}
+function gustMph(g, baseMph) {
+  const fallback = baseMph + 6;
+  if (!g || g.value == null) return fallback;
+  const v = /km/i.test(g.unitCode || '') ? g.value * 0.621371 : g.value;
+  const r = Math.round(v);
+  return r > baseMph ? r : fallback;
+}
+function firstNum(s) { const m = /(\d+)/.exec(s || ''); return m ? +m[1] : 0; }
+function fmtTime(d) {
+  let h = d.getHours(); const m = d.getMinutes();
+  const ap = h < 12 ? 'AM' : 'PM';
+  h = h % 12; if (h === 0) h = 12;
+  return h + ':' + (m < 10 ? '0' : '') + m + ' ' + ap;
+}
+function aqiLabel(v) {
+  if (v == null) return '—';
+  if (v <= 50) return 'Good';
+  if (v <= 100) return 'Moderate';
+  if (v <= 150) return 'Unhealthy for sensitive';
+  if (v <= 200) return 'Unhealthy';
+  if (v <= 300) return 'Very unhealthy';
+  return 'Hazardous';
+}
+function uvLabel(v) {
+  if (v == null) return '—';
+  if (v < 3) return 'Low';
+  if (v < 6) return 'Moderate';
+  if (v < 8) return 'High';
+  if (v < 11) return 'Very high';
+  return 'Extreme';
+}
+
+/* Pull the readable prose sections out of an NWS Area Forecast Discussion. */
+function parseAFD(text) {
+  if (!text) return null;
+  const clean = text.replace(/\r/g, '');
+  const WANT = [
+    ['KEY MESSAGES', 'Key Messages'], ['SYNOPSIS', 'Synopsis'],
+    ['SHORT TERM', 'Short Term'], ['LONG TERM', 'Long Term'], ['DISCUSSION', 'Discussion']
+  ];
+  const sections = [];
+  for (const pair of WANT) {
+    const startRe = new RegExp('^\\.' + pair[0] + '[^\\n]*\\n', 'm');
+    const m = startRe.exec(clean);
+    if (!m) continue;
+    let rest = clean.slice(m.index + m[0].length);
+    const endM = /\n\s*\n\s*\.[A-Z]|\n\s*&&|\n\s*\$\$/.exec(rest);
+    if (endM) rest = rest.slice(0, endM.index);
+    while (/^\s*(Issued|Updated) at[^\n]*\n?/i.test(rest)) {
+      rest = rest.replace(/^\s*(Issued|Updated) at[^\n]*\n?/i, '');
+    }
+    const items = [];
+    rest.split(/\n\s*\n/).forEach(chunk => {
+      const c = chunk.trim();
+      if (!c) return;
+      if (/^-\s/.test(c)) {
+        c.split(/\n(?=\s*-\s)/).forEach(b => {
+          const t = b.replace(/^\s*-\s*/, '').replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+          if (t) items.push({ text: t, bullet: true });
+        });
+      } else {
+        const t = c.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+        if (t) items.push({ text: t, bullet: false });
+      }
+    });
+    if (items.length) sections.push({ head: pair[1], items });
+  }
+  return sections.length ? sections : null;
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+/* Open-Meteo current weather_code → our glyph set (saved-location previews). */
+function omIcon(code, isDay) {
+  if (code == null) return isDay ? 'sun' : 'moon';
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return 'snow';
+  if ([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99].includes(code)) return 'rain';
+  if ([45, 48].includes(code)) return 'fog';
+  if ([2].includes(code)) return isDay ? 'partly' : 'partly-night';
+  if ([3].includes(code)) return 'cloud';
+  if ([1].includes(code)) return isDay ? 'partly' : 'partly-night';
+  return isDay ? 'sun' : 'moon';
+}
+
+/* ---- weather glyphs (multi-color hand-drawn SVG, per the design) ---- */
+const ICON_C = { sun: '#e8a723', moon: '#6a76a3', cloud: '#8b9298', rain: '#3b8fd4', snow: '#7fb6e0' };
+function wxIcon(type, size) {
+  const s = size;
+  const C = ICON_C;
+  const head = `<svg viewBox="0 0 24 24" width="${s}" height="${s}" style="display:block" fill="none"`;
+  switch (type) {
+    case 'sun':
+      return `${head} stroke="${C.sun}" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.2" fill="${C.sun}" fill-opacity="0.22"></circle><line x1="12" y1="2.6" x2="12" y2="5.2"></line><line x1="12" y1="18.8" x2="12" y2="21.4"></line><line x1="2.6" y1="12" x2="5.2" y2="12"></line><line x1="18.8" y1="12" x2="21.4" y2="12"></line><line x1="5.4" y1="5.4" x2="7.2" y2="7.2"></line><line x1="16.8" y1="16.8" x2="18.6" y2="18.6"></line><line x1="16.8" y1="7.2" x2="18.6" y2="5.4"></line><line x1="5.4" y1="18.6" x2="7.2" y2="16.8"></line></svg>`;
+    case 'moon':
+      return `${head} stroke="${C.moon}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" fill="${C.moon}" fill-opacity="0.16"></path></svg>`;
+    case 'partly':
+      return `${head} stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g stroke="${C.sun}"><circle cx="8.5" cy="8" r="2.8" fill="${C.sun}" fill-opacity="0.22"></circle><line x1="8.5" y1="2.6" x2="8.5" y2="4"></line><line x1="3.1" y1="8" x2="4.5" y2="8"></line><line x1="4.6" y1="4.1" x2="5.6" y2="5.1"></line></g><path d="M8.5,18.2 a4,4 0 0 1 0,-8 a5,5 0 0 1 9.4,-1 a3.5,3.5 0 0 1 0.4,9 z" stroke="${C.cloud}" fill="${C.cloud}" fill-opacity="0.13"></path></svg>`;
+    case 'partly-night':
+      return `${head} stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12.6 8.4A4.6 4.6 0 0 1 7 3.4a4.6 4.6 0 1 0 5.6 5Z" stroke="${C.moon}" fill="${C.moon}" fill-opacity="0.16"></path><path d="M8.5,18.2 a4,4 0 0 1 0,-8 a5,5 0 0 1 9.4,-1 a3.5,3.5 0 0 1 0.4,9 z" stroke="${C.cloud}" fill="${C.cloud}" fill-opacity="0.13"></path></svg>`;
+    case 'cloud':
+      return `${head} stroke="${C.cloud}" stroke-width="1.8" stroke-linejoin="round"><path d="M7,16.5 a4,4 0 0 1 0,-8 a5,5 0 0 1 9.4,-1 a3.5,3.5 0 0 1 0.4,9 z" fill="${C.cloud}" fill-opacity="0.13"></path></svg>`;
+    case 'fog':
+      return `${head} stroke="${C.cloud}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7,13.5 a4,4 0 0 1 0,-8 a5,5 0 0 1 9.4,-1 a3.5,3.5 0 0 1 0.4,9 z" fill="${C.cloud}" fill-opacity="0.13"></path><line x1="4" y1="17.5" x2="17" y2="17.5"></line><line x1="7" y1="20.5" x2="20" y2="20.5"></line></svg>`;
+    case 'rain':
+      return `${head} stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7,14 a4,4 0 0 1 0,-8 a5,5 0 0 1 9.4,-1 a3.5,3.5 0 0 1 0.4,9 z" stroke="${C.cloud}" fill="${C.cloud}" fill-opacity="0.13"></path><g stroke="${C.rain}"><line x1="8.6" y1="17.2" x2="7.4" y2="20.4"></line><line x1="12.4" y1="17.2" x2="11.2" y2="20.4"></line><line x1="16.2" y1="17.2" x2="15" y2="20.4"></line></g></svg>`;
+    case 'snow':
+      return `${head} stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7,14 a4,4 0 0 1 0,-8 a5,5 0 0 1 9.4,-1 a3.5,3.5 0 0 1 0.4,9 z" stroke="${C.cloud}" fill="${C.cloud}" fill-opacity="0.13"></path><g stroke="${C.snow}"><line x1="8" y1="17.6" x2="8" y2="20.8"></line><line x1="6.6" y1="18.4" x2="9.4" y2="20"></line><line x1="9.4" y1="18.4" x2="6.6" y2="20"></line><line x1="15" y1="17.6" x2="15" y2="20.8"></line><line x1="13.6" y1="18.4" x2="16.4" y2="20"></line><line x1="16.4" y1="18.4" x2="13.6" y2="20"></line></g></svg>`;
+    default:
+      return `${head}></svg>`;
+  }
+}
+
+/* ---- sample forecast: the honest fallback when a fetch fails ---- */
+function genHours(o) {
+  const out = [];
+  for (let i = 0; i < 48; i++) {
+    const hr = (o.startHour + i) % 24;
+    const phase = Math.cos((hr - 15) / 24 * 2 * Math.PI) * 0.5 + 0.5;
+    const temp = Math.round(o.lo + (o.hi - o.lo) * phase);
+    const isDay = hr >= o.riseHour && hr < o.setHour;
+    const hum = Math.round(Math.max(4, Math.min(100, o.hum + (o.hi - temp) * (o.humSlope || 0))));
+    const wind = Math.max(0, Math.round(o.wind + (isDay ? 3 : -1) * Math.abs(Math.sin(i / 5))));
+    out.push({
+      label: i === 0 ? 'Now' : hourLabel(hr),
+      temp, feels: apparent(temp, hum, wind), wind, hum,
+      pop: o.pop ? o.pop(hr, i) : 0,
+      icon: isDay ? o.dayIcon : o.nightIcon, h: hr
+    });
+  }
+  return out;
+}
+function genDaily(o) {
+  return ['Today', 'Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu'].map((day, i) => ({
+    day,
+    hi: o.hi + (o.drift ? o.drift[i] : 0),
+    lo: o.lo + (o.drift ? o.drift[i] : 0),
+    pop: o.dayPops ? o.dayPops[i] : 0,
+    icon: o.dayIcons ? o.dayIcons[i] : o.dayIcon
+  }));
+}
+const SAMPLE = {
+  live: false, place: 'Emerald Hills', region: '',
+  cur: { temp: 61, feels: 62, cond: 'Partly Cloudy', icon: 'partly', hi: 72, lo: 53 },
+  headline: 'Sunny conditions expected around 9 AM. Wind gusts up to 11 mph.',
+  wind: { speed: 5, gust: 11, dir: 283, dirLabel: '283° WNW' },
+  hum: { value: 83, dew: 54 },
+  aqi: { value: 34, label: 'Good' },
+  uv: { value: 2, label: 'Low' },
+  sun: { rise: '6:07 AM', set: '8:23 PM', frac: 0.14 },
+  hours: genHours({ hi: 72, lo: 53, startHour: 8, riseHour: 6, setHour: 20, hum: 70, humSlope: 1.1, wind: 5, dayIcon: 'partly', nightIcon: 'moon' }),
+  daily: genDaily({ hi: 72, lo: 53, drift: [0, 1, 0, -3, 2, -1, 0], dayIcon: 'sun', dayPops: [0, 0, 0, 20, 0, 30, 0], dayIcons: ['sun', 'sun', 'partly', 'cloud', 'sun', 'rain', 'sun'] }),
+  discussion: {
+    office: 'NWS Bay Area', issued: '5:41 AM', live: false,
+    sections: [
+      { head: 'Synopsis', items: [{ text: 'A weak ridge builds over the region today, bringing mostly sunny skies and near-seasonal highs in the low 70s. Onshore flow returns tonight with patchy low clouds near the coast by morning.', bullet: false }] },
+      { head: 'Short Term', items: [{ text: 'Dry conditions persist through the extended period. Afternoon breezes off the bay peak between 2 and 5 PM, with gusts to 11 mph along the ridgelines.', bullet: false }] }
+    ]
+  }
 };
 
-let elements = {};
-let map = null;
-let marker = null;
-let selectedLocation = null;
+/* ============================================================================
+   State
+   ========================================================================== */
+const state = {
+  location: loadLocation() || Object.assign({}, DEFAULT_LOCATION),
+  saved: loadSaved(),
+  d: JSON.parse(JSON.stringify(SAMPLE)),
+  zoom: 48,
+  series: { temp: true, feels: true, precip: true, wind: false, hum: false },
+  expanded: false
+};
 
-// Wait for DOM to be ready
+function loadLocation() { try { return JSON.parse(localStorage.getItem('ww_location')); } catch (e) { return null; } }
+function persistLocation() { try { localStorage.setItem('ww_location', JSON.stringify(state.location)); } catch (e) {} }
+function loadSaved() { try { return JSON.parse(localStorage.getItem('ww_saved')) || []; } catch (e) { return []; } }
+function persistSaved() { try { localStorage.setItem('ww_saved', JSON.stringify(state.saved)); } catch (e) {} }
+
+/* ============================================================================
+   Data load — fetch order matters (sun times drive day/night icons)
+   ========================================================================== */
+async function loadForecast(loc) {
+  const d = JSON.parse(JSON.stringify(SAMPLE));
+  if (loc.name) d.place = loc.name;
+  let riseH = 6.5, setH = 19.5;
+
+  try {
+    const om = await fetch('https://api.open-meteo.com/v1/forecast?latitude=' + loc.lat + '&longitude=' + loc.lon + '&daily=uv_index_max,sunrise,sunset&timezone=auto&forecast_days=1').then(r => r.json());
+    if (om.daily) {
+      const uvv = om.daily.uv_index_max[0];
+      if (uvv != null) { d.uv.value = Math.round(uvv * 10) / 10; d.uv.label = uvLabel(uvv); }
+      const rise = new Date(om.daily.sunrise[0]), set = new Date(om.daily.sunset[0]);
+      riseH = rise.getHours() + rise.getMinutes() / 60;
+      setH = set.getHours() + set.getMinutes() / 60;
+      d.sun.rise = fmtTime(rise); d.sun.set = fmtTime(set);
+      d.sun.frac = Math.max(0, Math.min(1, (Date.now() - rise.getTime()) / (set.getTime() - rise.getTime())));
+    }
+  } catch (e) { /* keep sample */ }
+
+  try {
+    const pts = await fetch('https://api.weather.gov/points/' + loc.lat + ',' + loc.lon).then(r => r.json());
+    const P = pts.properties;
+    const rl = P.relativeLocation && P.relativeLocation.properties;
+    if (!loc.name && rl && rl.city) d.place = rl.city;
+
+    const [hourly, daily] = await Promise.all([
+      fetch(P.forecastHourly).then(r => r.json()),
+      fetch(P.forecast).then(r => r.json())
+    ]);
+
+    const hp = (hourly.properties.periods || []).slice(0, 48);
+    d.hours = hp.map((p, i) => {
+      const start = new Date(p.startTime);
+      const rh = p.relativeHumidity && p.relativeHumidity.value;
+      const mph = firstNum(p.windSpeed);
+      // Day/night is a property of the MOMENT, not the period's start. Use the
+      // real clock for the current cell and each period's midpoint after.
+      const when = i === 0 ? new Date() : new Date(start.getTime() + 30 * 60 * 1000);
+      return {
+        label: i === 0 ? 'Now' : hourLabel(start.getHours()),
+        temp: Math.round(p.temperature),
+        feels: apparent(p.temperature, rh, mph),
+        wind: mph,
+        hum: rh == null ? 0 : Math.round(rh),
+        pop: (p.probabilityOfPrecipitation && p.probabilityOfPrecipitation.value) || 0,
+        icon: iconFor(p.shortForecast, isDayAt(when, riseH, setH)),
+        h: start.getHours()
+      };
+    });
+
+    const now = hp[0];
+    if (now) {
+      const rh = now.relativeHumidity && now.relativeHumidity.value;
+      const mph = firstNum(now.windSpeed);
+      d.cur.temp = Math.round(now.temperature);
+      d.cur.feels = apparent(now.temperature, rh, mph);
+      d.cur.cond = now.shortForecast;
+      d.cur.icon = iconFor(now.shortForecast, isDayAt(new Date(), riseH, setH));
+      d.wind.speed = mph;
+      d.wind.gust = gustMph(now.windGust, mph);
+      if (rh != null) d.hum.value = Math.round(rh);
+      const dew = now.dewpoint && now.dewpoint.value;
+      if (dew != null) d.hum.dew = Math.round(c2f(dew));
+      const idx = DIRS.indexOf(now.windDirection || '');
+      if (idx >= 0) { d.wind.dir = idx * 22.5; d.wind.dirLabel = Math.round(idx * 22.5) + '° ' + now.windDirection; }
+    }
+
+    const dp = daily.properties.periods || [];
+    if (dp.length) {
+      if (dp[0].detailedForecast) d.headline = dp[0].detailedForecast.split(/(?<=\.)\s/).slice(0, 2).join(' ');
+      const days = [];
+      for (let i = 0; i < dp.length; i++) {
+        const p = dp[i];
+        const pop = (p.probabilityOfPrecipitation && p.probabilityOfPrecipitation.value) || 0;
+        if (!p.isDaytime) {
+          if (!days.length) {
+            days.push({ day: 'Tonight', hi: null, lo: Math.round(p.temperature), pop, icon: iconFor(p.shortForecast, false) });
+          } else {
+            const last = days[days.length - 1];
+            if (last.lo == null) last.lo = Math.round(p.temperature);
+          }
+          continue;
+        }
+        const isNow = days.length === 0 || /^(Today|This )/i.test(p.name);
+        days.push({
+          day: isNow ? 'Today' : p.name.slice(0, 3),
+          hi: Math.round(p.temperature), lo: null, pop,
+          icon: iconFor(p.shortForecast, true)
+        });
+      }
+      const usable = days.filter((x, i) => x.lo != null && (x.hi != null || i === 0)).slice(0, 7);
+      if (usable.length >= 3) {
+        d.daily = usable;
+        d.cur.hi = usable[0].hi;
+        d.cur.lo = usable[0].lo;
+      }
+    }
+
+    const office = P.cwa || P.gridId;
+    if (office) {
+      try {
+        const list = await fetch('https://api.weather.gov/products/types/AFD/locations/' + office).then(r => r.json());
+        const first = list['@graph'] && list['@graph'][0];
+        const url = first && (first['@id'] || 'https://api.weather.gov/products/' + first.id);
+        if (url) {
+          const prod = await fetch(url).then(r => r.json());
+          const sections = parseAFD(prod.productText);
+          if (sections) {
+            d.discussion.sections = sections;
+            d.discussion.office = 'NWS ' + office;
+            d.discussion.issued = fmtTime(new Date(prod.issuanceTime));
+            d.discussion.live = true;
+          }
+        }
+      } catch (e) { /* keep sample discussion, flagged as sample */ }
+    }
+    d.live = true;
+  } catch (e) { /* keep sample */ }
+
+  // Active weather alerts — feeds the poster-red banner. Not in the sample.
+  try {
+    const al = await fetch('https://api.weather.gov/alerts/active?point=' + loc.lat + ',' + loc.lon).then(r => r.json());
+    const f = al.features && al.features[0];
+    if (f && f.properties && f.properties.event) d.region = f.properties.event;
+  } catch (e) { /* no banner */ }
+
+  try {
+    const aq = await fetch('https://air-quality-api.open-meteo.com/v1/air-quality?latitude=' + loc.lat + '&longitude=' + loc.lon + '&current=us_aqi').then(r => r.json());
+    const v = aq.current && aq.current.us_aqi;
+    if (v != null) { d.aqi.value = Math.round(v); d.aqi.label = aqiLabel(v); }
+  } catch (e) { /* keep sample */ }
+
+  return d;
+}
+
+/* ============================================================================
+   Forecast graphics
+   ========================================================================== */
+function uvGfx(uv) {
+  const t = Math.max(0, Math.min(1, (uv.value || 0) / 11));
+  const cx = 30, cy = 25, inner = 10.5 + 1.5 * t, len = 3.5 + 6.5 * t;
+  const rays = [];
+  for (let i = 0; i < 8; i++) {
+    const a = i * Math.PI / 4;
+    rays.push({
+      x1: +(cx + inner * Math.cos(a)).toFixed(1), y1: +(cy + inner * Math.sin(a)).toFixed(1),
+      x2: +(cx + (inner + len) * Math.cos(a)).toFixed(1), y2: +(cy + (inner + len) * Math.sin(a)).toFixed(1)
+    });
+  }
+  const c = uvColor(uv.value || 0);
+  return {
+    value: uv.value, label: uv.label, rays, color: c, textColor: darken(c, 0.3),
+    r: +(6.5 + 1.8 * t).toFixed(1),
+    fillOpacity: +(0.10 + 0.80 * t).toFixed(2),
+    rayOpacity: +(0.28 + 0.72 * t).toFixed(2),
+    rayWidth: +(1.4 + 0.9 * t).toFixed(1)
+  };
+}
+function humGfx(hum) {
+  const frac = Math.max(0, Math.min(1, (hum.value || 0) / 100));
+  const top = 11, bottom = 41, h = +((bottom - top) * frac).toFixed(1);
+  return {
+    value: hum.value, dew: hum.dew,
+    waterY: +(bottom - h).toFixed(1), waterH: h,
+    surfaceY: +(bottom - h).toFixed(1), showSurface: frac > 0.02
+  };
+}
+function aqiGfx(aqi) {
+  const t = Math.max(0, Math.min(1, (aqi.value || 0) / 150));
+  const c = aqiColor(aqi.value || 0);
+  return {
+    value: aqi.value, label: aqi.label, color: darken(c, 0.28),
+    sky: t < 0.34 ? '#cfe0ee' : (t < 0.67 ? '#e4dcc4' : '#e5cdb4'),
+    hazeColor: t < 0.34 ? '#dfe9f1' : (t < 0.67 ? '#e8dfc8' : '#e0c3a6'),
+    hazeFar: +(0.10 + 0.80 * t).toFixed(2),
+    hazeMid: +(0.02 + 0.60 * t).toFixed(2),
+    hazeBand: +(0.06 + 0.44 * t).toFixed(2)
+  };
+}
+function sunGfx(sun) {
+  const frac = sun.frac == null ? 0 : sun.frac;
+  const up = frac > 0 && frac < 1;
+  const elev = up ? Math.sin(frac * Math.PI) : 0;
+  const ang = Math.PI - frac * Math.PI;
+  let color = '#e0552a';
+  if (!up) color = '#6a76a3';
+  else if (elev > 0.72) color = '#f5cd3f';
+  else if (elev > 0.42) color = '#f0a92c';
+  else if (elev > 0.18) color = '#ef8b2c';
+  const parkX = frac <= 0 ? 14 : 110;
+  return {
+    rise: sun.rise, set: sun.set, color,
+    x: up ? +(62 + 48 * Math.cos(ang)).toFixed(1) : parkX,
+    y: up ? +(34 - 26 * Math.sin(ang)).toFixed(1) : 34,
+    glow: +(0.34 * (1 - Math.min(1, elev / 0.5))).toFixed(2)
+  };
+}
+function buildChart() {
+  const d = state.d, S = state.series, zoom = state.zoom;
+  const hours = d.hours;
+  const PX = zoom === 12 ? 44 : zoom === 24 ? 24 : 13;
+  const L = 30, R = 14, plotTop = 14, plotH = 118, baseline = plotTop + plotH;
+  const w = L + (hours.length - 1) * PX + R;
+
+  const temps = hours.map(h => h.temp);
+  const feels = hours.map(h => h.feels == null ? h.temp : h.feels);
+  const pool = S.feels ? temps.concat(feels) : temps;
+  let tmin = Math.min.apply(null, pool) - 3, tmax = Math.max.apply(null, pool) + 3;
+  if (tmax - tmin < 12) { const mid = (tmax + tmin) / 2; tmin = mid - 6; tmax = mid + 6; }
+
+  const X = i => +(L + i * PX).toFixed(1);
+  const YT = v => +(plotTop + (tmax - v) / (tmax - tmin) * plotH).toFixed(1);
+  const wmax = Math.max(10, Math.max.apply(null, hours.map(h => h.wind)) + 2);
+  const line = (arr, Y) => arr.map((v, i) => X(i) + ',' + Y(v)).join(' ');
+  const YW = v => +(baseline - (v / wmax) * plotH).toFixed(1);
+  const YH = v => +(baseline - (v / 100) * plotH).toFixed(1);
+
+  const humLine = line(hours.map(h => h.hum), YH);
+  const step = zoom === 12 ? 2 : zoom === 24 ? 3 : 6;
+  const ticks = [];
+  for (let i = 0; i < hours.length; i += step) {
+    ticks.push({
+      x: X(i), label: hours[i].label,
+      sub: S.wind ? hours[i].wind + 'mph' : (S.hum ? hours[i].hum + '%' : ''),
+      subColor: S.wind ? '#5b7a8c' : '#2f80d4'
+    });
+  }
+
+  const gridVals = [];
+  const step10 = (tmax - tmin) > 45 ? 20 : 10;
+  for (let v = Math.ceil(tmin / step10) * step10; v < tmax; v += step10) gridVals.push(v);
+  const grid = gridVals.map(v => ({ y: YT(v), ty: YT(v) - 3, label: v + '°' }));
+
+  const pops = [];
+  hours.forEach((h, i) => {
+    if (S.precip && h.pop > 0) {
+      const hh = (h.pop / 100) * plotH;
+      pops.push({ x: +(X(i) - PX / 2).toFixed(1), w: +Math.max(PX - 1, 3).toFixed(1), y: +(baseline - hh).toFixed(1), h: +hh.toFixed(1) });
+    }
+  });
+
+  const n = hours.length;
+  const tempStops = hours.map((h, i) => ({ o: (i / (n - 1) * 100).toFixed(2) + '%', c: tempColor(h.temp) }));
+
+  return {
+    span: hours.length,
+    viewBox: '0 0 ' + w + ' 170',
+    w, right: w - R + 6,
+    gx1: X(0), gx2: X(n - 1), tempStops,
+    grid, ticks, pops,
+    temp: line(temps, YT), feels: line(feels, YT),
+    wind: line(hours.map(h => h.wind), YW), hum: humLine,
+    humArea: X(0) + ',' + baseline + ' ' + humLine + ' ' + X(n - 1) + ',' + baseline,
+    showTemp: S.temp, showFeels: S.feels, showWind: S.wind, showHum: S.hum,
+    nowX: X(0), nowY: YT(temps[0]), nowColor: tempColor(temps[0])
+  };
+}
+
+/* ============================================================================
+   Forecast render
+   ========================================================================== */
+const REFRESH_SVG = '<svg viewBox="0 0 24 24" style="width:17px;height:17px;" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"></path><polyline points="20,4 20,11 13.5,11"></polyline></svg>';
+const ALERT_SVG = '<svg viewBox="0 0 24 24" style="width:16px;height:16px;flex:none;" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><path d="M12 3.5 1.8 20.5h20.4Z"></path><line x1="12" y1="10" x2="12" y2="14.5"></line><line x1="12" y1="17.4" x2="12" y2="17.5"></line></svg>';
+
+const SERIES_DEFS = [
+  { key: 'temp', label: 'Temp', swatch: '3px solid #d9482a' },
+  { key: 'feels', label: 'Feels', swatch: '2px dashed #8b8590' },
+  { key: 'precip', label: 'Precip', swatch: '9px solid rgba(59,143,212,.42)' },
+  { key: 'wind', label: 'Wind', swatch: '2px dotted #5b7a8c' },
+  { key: 'hum', label: 'Humidity', swatch: '2px solid #2f80d4' }
+];
+
+function chartSVG(c) {
+  let s = `<svg viewBox="${c.viewBox}" style="display:block;width:${c.w}px;height:170px;">`;
+  s += `<defs><linearGradient id="tempGrad" gradientUnits="userSpaceOnUse" x1="${c.gx1}" y1="0" x2="${c.gx2}" y2="0">`;
+  s += c.tempStops.map(st => `<stop offset="${st.o}" stop-color="${st.c}"></stop>`).join('');
+  s += `</linearGradient></defs>`;
+  s += c.grid.map(g => `<line x1="30" x2="${c.right}" y1="${g.y}" y2="${g.y}" stroke="rgba(32,30,29,.13)" stroke-width="1"></line><text x="0" y="${g.ty}" fill="#7d7979" font-size="10" font-weight="600">${g.label}</text>`).join('');
+  s += c.pops.map(p => `<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" fill="#3b8fd4" fill-opacity="0.20"></rect>`).join('');
+  if (c.showHum) s += `<polygon points="${c.humArea}" fill="#2f80d4" fill-opacity="0.10"></polygon><polyline points="${c.hum}" fill="none" stroke="#2f80d4" stroke-width="1.8"></polyline>`;
+  if (c.showWind) s += `<polyline points="${c.wind}" fill="none" stroke="#5b7a8c" stroke-width="1.8" stroke-dasharray="1 3" stroke-linecap="round"></polyline>`;
+  if (c.showFeels) s += `<polyline points="${c.feels}" fill="none" stroke="#8b8590" stroke-width="1.6" stroke-dasharray="5 4"></polyline>`;
+  if (c.showTemp) s += `<polyline points="${c.temp}" fill="none" stroke="url(#tempGrad)" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"></polyline><circle cx="${c.nowX}" cy="${c.nowY}" r="4.5" fill="${c.nowColor}" stroke="#f3f2f2" stroke-width="1.5"></circle>`;
+  s += `<line x1="${c.nowX}" x2="${c.nowX}" y1="14" y2="132" stroke="#201e1d" stroke-width="1" stroke-dasharray="3 3" opacity="0.32"></line>`;
+  s += c.ticks.map(tk => `<line x1="${tk.x}" x2="${tk.x}" y1="132" y2="137" stroke="rgba(32,30,29,.35)" stroke-width="1"></line><text x="${tk.x}" y="150" fill="#605d5d" font-size="10" font-weight="600" text-anchor="middle">${tk.label}</text><text x="${tk.x}" y="164" fill="${tk.subColor}" font-size="9" font-weight="600" text-anchor="middle">${tk.sub}</text>`).join('');
+  s += `</svg>`;
+  return s;
+}
+
+function renderForecast() {
+  const d = state.d, S = state.series;
+  const scr = document.getElementById('forecast-screen');
+
+  const summary = d.cur.hi != null
+    ? 'H ' + d.cur.hi + '° / L ' + d.cur.lo + '° / Feels ' + d.cur.feels + '°'
+    : 'Low ' + d.cur.lo + '° tonight / Feels ' + d.cur.feels + '°';
+  const sourceLabel = d.live ? 'Live · NWS' : 'Sample data';
+
+  // 7-day domain
+  const his = d.daily.map(x => x.hi).filter(v => v != null);
+  const los = d.daily.map(x => x.lo).filter(v => v != null);
+  const wmin = Math.min.apply(null, los) - 2, wmax = Math.max.apply(null, his.concat(los)) + 2;
+  const dspan = Math.max(1, wmax - wmin);
+
+  const zoomBtns = [12, 24, 48].map(z => `<button class="zoom__btn ${state.zoom === z ? 'is-on' : ''}" data-zoom="${z}" type="button">${z}h</button>`).join('');
+  const chips = SERIES_DEFS.map(o => `<button class="chip ${S[o.key] ? 'is-on' : ''}" data-series="${o.key}" type="button"><span class="chip__swatch" style="border-top:${o.swatch}"></span>${o.label}</button>`).join('');
+
+  const hourCells = d.hours.map(h => `<div class="hour-cell"><span class="hour-cell__label">${esc(h.label)}</span>${wxIcon(h.icon, 21)}<span class="hour-cell__temp" style="color:${tempInk(h.temp)}">${h.temp}°</span><span class="hour-cell__pop">${h.pop >= 10 ? h.pop + '%' : ''}</span></div>`).join('');
+
+  const dayRows = d.daily.map(x => {
+    const hasHi = x.hi != null;
+    const loC = tempColor(x.lo), hiC = tempColor(hasHi ? x.hi : x.lo);
+    const left = ((x.lo - wmin) / dspan * 100).toFixed(1) + '%';
+    const width = (hasHi ? Math.max(2, (x.hi - x.lo) / dspan * 100) : 3).toFixed(1) + '%';
+    return `<div class="day-row">
+      <div class="day-row__name"><div class="day-row__day">${esc(x.day)}</div><div class="day-row__pop">${x.pop > 0 ? x.pop + '%' : ''}</div></div>
+      <span class="day-row__icon">${wxIcon(x.icon, 21)}</span>
+      <span class="day-row__lo" style="color:${tempInk(x.lo)}">${x.lo}°</span>
+      <div class="day-row__track"><div class="day-row__fill" style="left:${left};width:${width};background:linear-gradient(90deg,${loC},${hiC})"></div></div>
+      <span class="day-row__hi" style="color:${hasHi ? tempInk(x.hi) : '#9b9797'}">${hasHi ? x.hi + '°' : '—'}</span>
+    </div>`;
+  }).join('');
+
+  const hum = humGfx(d.hum), aqi = aqiGfx(d.aqi), uv = uvGfx(d.uv), sun = sunGfx(d.sun);
+  const windRotate = 'rotate(' + ((d.wind.dir + 180) % 360) + ' 32 32)';
+
+  const windCard = `<div class="card card--wind">
+    <div style="flex:1;">
+      <div class="card__kicker">Wind</div>
+      <div class="card__value">${d.wind.speed} <span>mph</span></div>
+      <div class="wind-row"><span>Gusts</span><span>${d.wind.gust} mph</span></div>
+      <div class="wind-row"><span>Direction</span><span>${esc(d.wind.dirLabel)}</span></div>
+    </div>
+    <svg viewBox="0 0 64 64" style="width:78px;height:78px;display:block;flex:none;">
+      <circle cx="32" cy="32" r="25" fill="none" stroke="rgba(32,30,29,.22)" stroke-width="1.5"></circle>
+      <text x="32" y="12" fill="#7d7979" font-size="8" font-weight="700" text-anchor="middle">N</text>
+      <text x="54" y="35" fill="#7d7979" font-size="8" font-weight="700" text-anchor="middle">E</text>
+      <text x="32" y="59" fill="#7d7979" font-size="8" font-weight="700" text-anchor="middle">S</text>
+      <text x="10" y="35" fill="#7d7979" font-size="8" font-weight="700" text-anchor="middle">W</text>
+      <g transform="${windRotate}">
+        <line x1="32" y1="52" x2="32" y2="16" stroke="#5b7a8c" stroke-width="2.4"></line>
+        <circle cx="32" cy="52" r="2.6" fill="#5b7a8c"></circle>
+        <polygon points="32,10 28.3,17.4 35.7,17.4" fill="#5b7a8c"></polygon>
+      </g>
+    </svg>
+  </div>`;
+
+  const humCard = `<div class="card card--metric">
+    <div class="card__kicker">Humidity</div>
+    <div class="card__value" style="color:#2265ad">${d.hum.value}%</div>
+    <svg viewBox="0 0 60 48">
+      <rect x="22" y="${hum.waterY}" width="16" height="${hum.waterH}" fill="#2f80d4" fill-opacity="0.42"></rect>
+      ${hum.showSurface ? `<line x1="22" x2="38" y1="${hum.surfaceY}" y2="${hum.surfaceY}" stroke="#2265ad" stroke-width="2.2"></line>` : ''}
+      <path d="M21 8 L21 41 L39 41 L39 8" fill="none" stroke="#201e1d" stroke-width="2"></path>
+      <line x1="16" y1="44" x2="44" y2="44" stroke="#201e1d" stroke-width="2"></line>
+    </svg>
+    <div class="card__caption">Dew point ${d.hum.dew}°</div>
+  </div>`;
+
+  const aqiCard = `<div class="card card--metric">
+    <div class="card__kicker">Air Quality</div>
+    <div class="card__value" style="color:${aqi.color}">${d.aqi.value}</div>
+    <svg viewBox="0 0 60 48">
+      <rect x="0" y="0" width="60" height="44" fill="${aqi.sky}"></rect>
+      <polygon points="0,30 13,17 24,27 33,20 46,32 60,24 60,44 0,44" fill="#8d9aa5"></polygon>
+      <rect x="0" y="0" width="60" height="44" fill="${aqi.hazeColor}" fill-opacity="${aqi.hazeFar}"></rect>
+      <polygon points="0,36 11,27 22,35 34,28 47,38 60,33 60,44 0,44" fill="#5c7360"></polygon>
+      <rect x="0" y="0" width="60" height="44" fill="${aqi.hazeColor}" fill-opacity="${aqi.hazeMid}"></rect>
+      <polygon points="0,42 12,36 26,42 40,37 60,42 60,44 0,44" fill="#2f3d33"></polygon>
+      <rect x="0" y="26" width="60" height="18" fill="${aqi.hazeColor}" fill-opacity="${aqi.hazeBand}"></rect>
+      <line x1="0" y1="44" x2="60" y2="44" stroke="#201e1d" stroke-width="2"></line>
+    </svg>
+    <div class="card__caption">${esc(d.aqi.label)}</div>
+  </div>`;
+
+  const uvCard = `<div class="card card--metric">
+    <div class="card__kicker">UV Index</div>
+    <div class="card__value" style="color:${uv.textColor}">${d.uv.value}</div>
+    <svg viewBox="0 0 60 48">
+      ${uv.rays.map(r => `<line x1="${r.x1}" y1="${r.y1}" x2="${r.x2}" y2="${r.y2}" stroke="${uv.color}" stroke-opacity="${uv.rayOpacity}" stroke-width="${uv.rayWidth}" stroke-linecap="round"></line>`).join('')}
+      <circle cx="30" cy="25" r="${uv.r}" fill="${uv.color}" fill-opacity="${uv.fillOpacity}" stroke="${uv.color}" stroke-width="2.2"></circle>
+    </svg>
+    <div class="card__caption">${esc(d.uv.label)} · peak today</div>
+  </div>`;
+
+  const daylightCard = `<div class="card card--metric card--daylight">
+    <div class="card__kicker">Daylight</div>
+    <div class="card__value">${esc(sun.set)}</div>
+    <svg viewBox="0 0 124 44">
+      <path d="M 14,34 A 48,26 0 0 1 110,34" fill="none" stroke="rgba(32,30,29,.2)" stroke-width="1.5" stroke-dasharray="2 3"></path>
+      <line x1="10" y1="34" x2="114" y2="34" stroke="#201e1d" stroke-width="2"></line>
+      <circle cx="${sun.x}" cy="${sun.y}" r="10" fill="${sun.color}" fill-opacity="${sun.glow}"></circle>
+      <circle cx="${sun.x}" cy="${sun.y}" r="5" fill="${sun.color}"></circle>
+    </svg>
+    <div class="card__caption">Sunrise ${esc(sun.rise)}</div>
+  </div>`;
+
+  // discussion
+  const secs = d.discussion.sections || [];
+  const shownSecs = state.expanded ? secs : secs.slice(0, 1);
+  let discParas = '';
+  shownSecs.forEach(sec => {
+    sec.items.forEach((it, i) => {
+      const gap = i === 0 ? '5px' : (it.bullet ? '6px' : '10px');
+      const indent = it.bullet ? '2px' : '0px';
+      if (i === 0) discParas += `<div class="disc-head">${esc(sec.head)}</div>`;
+      discParas += `<div class="disc-body" style="margin-top:${gap};padding-left:${indent}">${esc(it.bullet ? '— ' + it.text : it.text)}</div>`;
+    });
+  });
+  const discLive = d.discussion.live;
+  const discLabel = discLive ? 'Forecast Discussion' : 'Forecast Discussion — sample';
+  const discMeta = discLive ? esc(d.discussion.office) + ' · issued ' + esc(d.discussion.issued) : 'Sample text — live discussion unavailable';
+  const discToggle = secs.length > 1 ? `<button class="disc-toggle" id="disc-toggle" type="button">${state.expanded ? 'Show less' : 'Read full discussion'}</button>` : '';
+
+  scr.innerHTML = `<div class="forecast__inner">
+    <header class="fc-header">
+      <button id="fc-open-picker" type="button" title="Change location" style="background:transparent;border:none;padding:0;text-align:left;cursor:pointer;color:inherit;font:inherit;">
+        <div class="kicker">${esc(sourceLabel)}</div>
+        <div class="fc-place">${esc(d.place)}</div>
+      </button>
+      <button class="icon-btn" id="fc-refresh" type="button" title="Refresh" aria-label="Refresh forecast">${REFRESH_SVG}</button>
+    </header>
+
+    ${d.region ? `<div class="fc-alert">${ALERT_SVG}<span>${esc(d.region)}</span></div>` : ''}
+
+    <div class="fc-current">
+      <div class="fc-temp" style="color:${tempInk(d.cur.temp)}">${d.cur.temp}°</div>
+      <div style="padding-top:3px;min-width:0;">
+        ${wxIcon(d.cur.icon, 34)}
+        <div class="fc-cond">${esc(d.cur.cond)}</div>
+        <div class="fc-summary">${esc(summary)}</div>
+      </div>
+    </div>
+
+    <div class="fc-headline"><div class="fc-headline__bar"></div><div class="fc-headline__text">${esc(d.headline)}</div></div>
+
+    <section class="fc-section">
+      <div class="chart-head"><span class="chart-title">Next ${d.hours.length} Hours</span><div class="zoom">${zoomBtns}</div></div>
+      <div class="series">${chips}</div>
+      <div class="scrollx">${chartSVG(buildChart())}</div>
+      <div class="scrollx hour-strip">${hourCells}</div>
+    </section>
+
+    <section class="fc-section">
+      <div class="section-head">7-Day Forecast</div>
+      ${dayRows}
+    </section>
+
+    <section class="fc-section">
+      <div class="section-head cards-head">Conditions</div>
+      ${windCard}
+      <div class="cards-grid">${humCard}${aqiCard}${uvCard}${daylightCard}</div>
+    </section>
+
+    <section class="fc-section">
+      <div class="section-head">${esc(discLabel)}</div>
+      ${discParas}
+      ${discToggle}
+      <div class="disc-meta">${discMeta}</div>
+    </section>
+
+    <div class="footnote">Forecast &amp; discussion: NWS api.weather.gov. UV, daylight &amp; AQI: Open-Meteo (not in the NWS feed).</div>
+  </div>`;
+
+  // events
+  document.getElementById('fc-open-picker').addEventListener('click', openPicker);
+  document.getElementById('fc-refresh').addEventListener('click', () => refresh());
+  const dt = document.getElementById('disc-toggle');
+  if (dt) dt.addEventListener('click', () => { state.expanded = !state.expanded; renderForecast(); });
+  scr.querySelectorAll('.zoom__btn').forEach(b => b.addEventListener('click', () => { state.zoom = +b.dataset.zoom; renderForecast(); }));
+  scr.querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => toggleSeries(b.dataset.series)));
+}
+
+function toggleSeries(k) {
+  const s = Object.assign({}, state.series);
+  s[k] = !s[k];
+  if (!s.temp && !s.feels && !s.precip && !s.wind && !s.hum) return; // at least one on
+  state.series = s;
+  renderForecast();
+}
+
+async function refresh() {
+  const btn = document.getElementById('fc-refresh');
+  if (btn) btn.style.opacity = '0.4';
+  state.d = await loadForecast(state.location);
+  renderForecast();
+}
+
+/* ============================================================================
+   Location picker
+   ========================================================================== */
+const picker = {
+  view: 'list', query: '', editing: false,
+  pin: { lat: DEFAULT_LOCATION.lat, lon: DEFAULT_LOCATION.lon },
+  zoom: 13, draftName: '', home: false, editId: null,
+  grid: { status: 'idle', office: '', gridId: '', cell: '', place: '' },
+  _map: null, _node: null, _gridT: null, _gridToken: 0, _searchT: null
+};
+
+const PIN_SVG = `<svg viewBox="0 0 24 24" style="width:17px;height:17px;" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 21.5s7-6.2 7-11.5a7 7 0 1 0-14 0c0 5.3 7 11.5 7 11.5Z"></path><circle cx="12" cy="10" r="2.4"></circle></svg>`;
+const HOME_SVG = `<svg viewBox="0 0 24 24" style="width:14px;height:14px;" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M4 11.2 12 4.5l8 6.7V20H4Z"></path></svg>`;
+const CROSSHAIR_SVG = `<svg viewBox="0 0 56 56" style="width:56px;height:56px;display:block;">
+  <line x1="28" y1="0" x2="28" y2="19" stroke="#f3f2f2" stroke-width="4"></line><line x1="28" y1="37" x2="28" y2="56" stroke="#f3f2f2" stroke-width="4"></line><line x1="0" y1="28" x2="19" y2="28" stroke="#f3f2f2" stroke-width="4"></line><line x1="37" y1="28" x2="56" y2="28" stroke="#f3f2f2" stroke-width="4"></line>
+  <line x1="28" y1="0" x2="28" y2="19" stroke="#ec3013" stroke-width="2"></line><line x1="28" y1="37" x2="28" y2="56" stroke="#ec3013" stroke-width="2"></line><line x1="0" y1="28" x2="19" y2="28" stroke="#ec3013" stroke-width="2"></line><line x1="37" y1="28" x2="56" y2="28" stroke="#ec3013" stroke-width="2"></line>
+  <circle cx="28" cy="28" r="4.5" fill="#ec3013" stroke="#f3f2f2" stroke-width="2"></circle></svg>`;
+
+function openPicker() { picker.view = 'list'; picker.query = ''; picker.editing = false; buildListView(); showScreen('location'); }
+function backToForecast() { teardownMap(); showScreen('forecast'); }
+
+function buildListView() {
+  const scr = document.getElementById('location-screen');
+  scr.innerHTML = `<div class="picker__list">
+    <div class="picker-header">
+      <div><div class="kicker">Settings</div><div class="picker-title">Locations</div></div>
+      <button class="icon-btn icon-btn--ink" id="pk-add" type="button" title="Add location" aria-label="Add location">
+        <svg viewBox="0 0 24 24" style="width:18px;height:18px;" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+      </button>
+    </div>
+
+    <div class="search">
+      <span class="search__icon"><svg viewBox="0 0 24 24" style="width:17px;height:17px;" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="16.2" y1="16.2" x2="21" y2="21"></line></svg></span>
+      <input class="search__input" id="pk-search" type="text" inputmode="search" placeholder="Search city or ZIP" autocomplete="off" />
+      <button class="search__clear" id="pk-clear" type="button" title="Clear" aria-label="Clear search" hidden><svg viewBox="0 0 24 24" style="width:16px;height:16px;" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"></line><line x1="18" y1="6" x2="6" y2="18"></line></svg></button>
+    </div>
+
+    <div id="pk-results" hidden></div>
+    <div id="pk-saved"></div>
+
+    <div class="footnote">NWS forecasts resolve to a 2.5&nbsp;km grid cell. A pin dropped on your street gives a different cell — and often a different forecast — than one on the city centroid. Search gets you close; the map gets you exact.</div>
+  </div>`;
+
+  document.getElementById('pk-add').addEventListener('click', () => openMapNew());
+  const input = document.getElementById('pk-search');
+  const clear = document.getElementById('pk-clear');
+  input.addEventListener('input', () => {
+    picker.query = input.value;
+    clear.hidden = picker.query.trim().length === 0;
+    scheduleSearch();
+  });
+  clear.addEventListener('click', () => { input.value = ''; picker.query = ''; clear.hidden = true; input.focus(); scheduleSearch(); });
+  renderSaved();
+  hydrateSaved();
+}
+
+function scheduleSearch() {
+  clearTimeout(picker._searchT);
+  const results = document.getElementById('pk-results');
+  const saved = document.getElementById('pk-saved');
+  const q = picker.query.trim();
+  if (!q) { results.hidden = true; results.innerHTML = ''; saved.hidden = false; return; }
+  saved.hidden = true; results.hidden = false;
+  results.innerHTML = `<div style="margin-top:18px;"><div class="results-head">Searching…</div></div>`;
+  picker._searchT = setTimeout(() => runSearch(q), 400);
+}
+
+async function runSearch(q) {
+  let list = [];
+  try {
+    const res = await fetch('https://nominatim.openstreetmap.org/search?q=' + encodeURIComponent(q) + '&countrycodes=us&format=json&addressdetails=1&limit=5', { headers: { 'Accept': 'application/json' } });
+    const raw = await res.json();
+    list = raw.map(r => {
+      const a = r.address || {};
+      const name = a.city || a.town || a.village || a.hamlet || a.county || (r.display_name || '').split(',')[0];
+      const sub = [a.county, a.state, a.postcode].filter(Boolean).join(' · ');
+      return { name: name, sub: sub || (r.display_name || ''), lat: +r.lat, lon: +r.lon };
+    });
+  } catch (e) { list = []; }
+  if (picker.query.trim() !== q) return; // superseded
+  renderResults(list);
+}
+
+function renderResults(list) {
+  const results = document.getElementById('pk-results');
+  if (!results) return;
+  if (!list.length) {
+    results.innerHTML = `<div style="margin-top:18px;">
+      <div class="results-head">No matches</div>
+      <div class="empty-note">No match. Drop a pin on the map instead — that is the only way to get an exact grid point.</div>
+      <button class="btn-save" id="pk-openmap" type="button" style="flex:none;width:100%;">Open map</button>
+    </div>`;
+    document.getElementById('pk-openmap').addEventListener('click', () => openMapNew());
+    return;
+  }
+  const rows = list.map((r, i) => `<button class="result-row" data-i="${i}" type="button">
+    <span class="result-row__icon">${PIN_SVG}</span>
+    <span class="result-row__body"><span class="result-row__name">${esc(r.name)}</span><span class="result-row__sub">${esc(r.sub)}</span></span>
+    <span class="result-row__cta">Set on map</span>
+  </button>`).join('');
+  results.innerHTML = `<div style="margin-top:18px;"><div class="results-head">${list.length} match${list.length === 1 ? '' : 'es'}</div>${rows}</div>`;
+  results.querySelectorAll('.result-row').forEach(b => {
+    const r = list[+b.dataset.i];
+    b.addEventListener('click', () => openMapAt(r.lat, r.lon, r.name, null, false));
+  });
+}
+
+function renderSaved() {
+  const wrap = document.getElementById('pk-saved');
+  if (!wrap) return;
+  const rows = state.saved.map(s => {
+    const removeBtn = picker.editing ? `<button class="saved-row__remove" data-id="${s.id}" data-act="remove" type="button" title="Remove"><svg viewBox="0 0 24 24" style="width:13px;height:13px;" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="6" y1="12" x2="18" y2="12"></line></svg></button>` : '';
+    const editBtn = picker.editing ? `<button class="saved-row__edit" data-id="${s.id}" data-act="edit" type="button" title="Adjust pin"><svg viewBox="0 0 24 24" style="width:14px;height:14px;" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M4 20h4L20 8l-4-4L4 16Z"></path></svg></button>` : '';
+    const homeMark = s.home ? `<span class="saved-row__home">${HOME_SVG}</span>` : '';
+    const tempTxt = s.temp != null ? s.temp + '°' : '—';
+    const tempCol = s.temp != null ? tempInk(s.temp) : '#9b9797';
+    const icon = s.icon ? wxIcon(s.icon, 20) : '';
+    return `<div class="saved-row">
+      ${removeBtn}
+      <button class="saved-row__main" data-id="${s.id}" data-act="select" type="button">
+        <span class="saved-row__label">
+          <span class="saved-row__nameline">${homeMark}<span class="saved-row__name">${esc(s.name)}</span></span>
+          <span class="saved-row__meta">${s.lat.toFixed(4)}, ${s.lon.toFixed(4)}${s.grid ? ' · ' + esc(s.grid) : ''}</span>
+        </span>
+        <span class="saved-row__cond"><span id="saved-icon-${s.id}">${icon}</span><span class="saved-row__temp" id="saved-temp-${s.id}" style="color:${tempCol}">${tempTxt}</span></span>
+      </button>
+      ${editBtn}
+    </div>`;
+  }).join('');
+
+  wrap.innerHTML = `<div style="margin-top:22px;">
+    <div class="saved-head"><span class="saved-head__title">Saved</span>${state.saved.length ? `<button class="saved-head__edit" id="pk-edit" type="button">${picker.editing ? 'Done' : 'Edit'}</button>` : ''}</div>
+    ${rows}
+    <button class="use-current" id="pk-current" type="button">
+      <span class="use-current__icon"><svg viewBox="0 0 24 24" style="width:18px;height:18px;" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="3"></circle><circle cx="12" cy="12" r="8"></circle><line x1="12" y1="1.5" x2="12" y2="4"></line><line x1="12" y1="20" x2="12" y2="22.5"></line><line x1="1.5" y1="12" x2="4" y2="12"></line><line x1="20" y1="12" x2="22.5" y2="12"></line></svg></span>
+      <span class="use-current__label">Use my current location</span>
+      <span class="use-current__note">GPS</span>
+    </button>
+  </div>`;
+
+  const editBtn = document.getElementById('pk-edit');
+  if (editBtn) editBtn.addEventListener('click', () => { picker.editing = !picker.editing; renderSaved(); hydrateSaved(); });
+  document.getElementById('pk-current').addEventListener('click', useCurrentLocation);
+  wrap.querySelectorAll('[data-act]').forEach(b => {
+    const id = b.dataset.id, act = b.dataset.act;
+    const s = state.saved.find(x => String(x.id) === String(id));
+    if (!s) return;
+    b.addEventListener('click', () => {
+      if (act === 'remove') { state.saved = state.saved.filter(x => String(x.id) !== String(id)); persistSaved(); renderSaved(); hydrateSaved(); }
+      else if (act === 'edit') openMapAt(s.lat, s.lon, s.name, s.id, s.home);
+      else selectSaved(s);
+    });
+  });
+}
+
+// Best-effort current-temp preview for saved rows (Open-Meteo, one call each).
+function hydrateSaved() {
+  state.saved.forEach(async s => {
+    if (s.temp != null) return;
+    try {
+      const j = await fetch('https://api.open-meteo.com/v1/forecast?latitude=' + s.lat + '&longitude=' + s.lon + '&current=temperature_2m,weather_code,is_day&temperature_unit=fahrenheit&timezone=auto').then(r => r.json());
+      const cur = j.current;
+      if (!cur) return;
+      s.temp = Math.round(cur.temperature_2m);
+      s.icon = omIcon(cur.weather_code, cur.is_day);
+      persistSaved();
+      const te = document.getElementById('saved-temp-' + s.id);
+      const ie = document.getElementById('saved-icon-' + s.id);
+      if (te) { te.textContent = s.temp + '°'; te.style.color = tempInk(s.temp); }
+      if (ie) ie.innerHTML = wxIcon(s.icon, 20);
+    } catch (e) { /* leave placeholder */ }
+  });
+}
+
+function selectSaved(s) {
+  state.location = { lat: s.lat, lon: s.lon, name: s.name };
+  persistLocation();
+  backToForecast();
+  refresh();
+}
+
+function useCurrentLocation() {
+  if (!navigator.geolocation) { openMapNew(); return; }
+  const note = document.querySelector('.use-current__note');
+  if (note) note.textContent = 'Locating…';
+  navigator.geolocation.getCurrentPosition(
+    pos => openMapAt(pos.coords.latitude, pos.coords.longitude, '', null, false),
+    () => { if (note) note.textContent = 'GPS'; openMapNew(); },
+    { enableHighAccuracy: true, timeout: 8000 }
+  );
+}
+
+function openMapNew() {
+  const c = state.location;
+  openMapAt(c.lat, c.lon, '', null, false);
+}
+function openMapAt(lat, lon, name, id, home) {
+  teardownMap();
+  picker.view = 'map';
+  picker.pin = { lat: lat, lon: lon };
+  picker.draftName = name || '';
+  picker.editId = id == null ? null : id;
+  picker.home = !!home;
+  picker.zoom = 13;
+  picker.grid = { status: 'loading', office: '', gridId: '', cell: '', place: '' };
+  buildMapView();
+}
+
+function buildMapView() {
+  const scr = document.getElementById('location-screen');
+  const kicker = picker.editId != null ? 'Adjust saved pin' : 'New location';
+  scr.innerHTML = `<div class="picker__map-view">
+    <div class="map-header">
+      <button class="icon-btn" id="mp-back" type="button" title="Back" aria-label="Back to list"><svg viewBox="0 0 24 24" style="width:17px;height:17px;" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><polyline points="14,5 7,12 14,19"></polyline></svg></button>
+      <div style="flex:1;min-width:0;"><div class="map-header__kicker">${esc(kicker)}</div><div class="map-header__title">Drop the pin</div></div>
+    </div>
+
+    <div class="map-wrap">
+      <div id="mp-map" class="map-node map-ink"></div>
+      <div class="map-cross">${CROSSHAIR_SVG}</div>
+      <div class="map-badge-wrap"><span class="map-badge" id="mp-zoom">${zoomNote(picker.zoom)}</span></div>
+    </div>
+
+    <div class="map-form">
+      <div class="coord-grid">
+        <div class="coord-cell"><div class="coord-cell__label">Latitude</div><div class="coord-cell__value" id="mp-lat">${picker.pin.lat.toFixed(4)}°</div></div>
+        <div class="coord-cell"><div class="coord-cell__label">Longitude</div><div class="coord-cell__value" id="mp-lon">${picker.pin.lon.toFixed(4)}°</div></div>
+      </div>
+
+      <div id="mp-grid"></div>
+
+      <div class="name-field">
+        <label for="mp-name">Name this place</label>
+        <input id="mp-name" type="text" placeholder="Home" value="${esc(picker.draftName)}" autocomplete="off" />
+      </div>
+
+      <label class="home-check ${picker.home ? 'is-on' : ''}" id="mp-home-label">
+        <span class="home-check__box">${picker.home ? '<svg viewBox="0 0 24 24" style="width:13px;height:13px;" fill="none" stroke="#f3f2f2" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,13 9,18 20,6"></polyline></svg>' : ''}</span>
+        <input type="checkbox" id="mp-home" ${picker.home ? 'checked' : ''} />
+        <span class="home-check__label">Make this my home location</span>
+      </label>
+
+      <div class="map-actions">
+        <button class="btn-save" id="mp-save" type="button" disabled>${picker.editId != null ? 'Update location' : 'Save location'}</button>
+        <button class="btn-cancel" id="mp-cancel" type="button">Cancel</button>
+      </div>
+
+      <div class="footnote">The pin stays centred — drag the map under it. Coordinates are saved at four decimals (about 11&nbsp;m), the precision NWS grid lookups need.</div>
+    </div>
+  </div>`;
+
+  document.getElementById('mp-back').addEventListener('click', backToList);
+  document.getElementById('mp-cancel').addEventListener('click', backToList);
+  document.getElementById('mp-name').addEventListener('input', e => { picker.draftName = e.target.value; updateSaveBtn(); });
+  document.getElementById('mp-home').addEventListener('change', e => {
+    picker.home = e.target.checked;
+    const lbl = document.getElementById('mp-home-label');
+    lbl.classList.toggle('is-on', picker.home);
+    lbl.querySelector('.home-check__box').innerHTML = picker.home ? '<svg viewBox="0 0 24 24" style="width:13px;height:13px;" fill="none" stroke="#f3f2f2" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,13 9,18 20,6"></polyline></svg>' : '';
+  });
+  document.getElementById('mp-save').addEventListener('click', saveLocation);
+  updateGridStatus();
+  ensureMap();
+}
+
+function backToList() { teardownMap(); picker.view = 'list'; buildListView(); }
+
+function zoomNote(z) { return 'Zoom ' + z + ' · ' + (z >= 15 ? 'street level' : z >= 12 ? 'neighborhood' : 'regional'); }
+
+function teardownMap() {
+  if (picker._map) { try { picker._map.remove(); } catch (e) {} picker._map = null; }
+  picker._node = null;
+}
+
+function ensureMap() {
+  const node = document.getElementById('mp-map');
+  if (!node) return;
+  picker._node = node;
+  if (picker._map) { picker._map.invalidateSize(); return; }
+  if (!window.L) { setTimeout(ensureMap, 120); return; }
+
+  const map = window.L.map(node, { center: [picker.pin.lat, picker.pin.lon], zoom: picker.zoom, zoomControl: true, attributionControl: true });
+  window.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+  map.zoomControl.setPosition('topright');
+  picker._map = map;
+
+  map.on('moveend', () => {
+    const c = map.getCenter();
+    picker.pin = { lat: c.lat, lon: c.lng };
+    picker.zoom = map.getZoom();
+    setText('mp-lat', c.lat.toFixed(4) + '°');
+    setText('mp-lon', c.lng.toFixed(4) + '°');
+    setText('mp-zoom', zoomNote(picker.zoom));
+    lookupGrid(c.lat, c.lng);
+  });
+  map.on('zoomend', () => { picker.zoom = map.getZoom(); setText('mp-zoom', zoomNote(picker.zoom)); });
+  setTimeout(() => { map.invalidateSize(); lookupGrid(picker.pin.lat, picker.pin.lon); }, 60);
+}
+
+function setText(id, txt) { const el = document.getElementById(id); if (el) el.textContent = txt; }
+
+/* Resolve the pin to its actual NWS grid cell. Debounced; doubles as the
+   US-only coverage check. */
+function lookupGrid(lat, lon) {
+  clearTimeout(picker._gridT);
+  picker.grid = Object.assign({}, picker.grid, { status: 'loading' });
+  updateGridStatus();
+  picker._gridT = setTimeout(async () => {
+    const token = ++picker._gridToken;
+    try {
+      const r = await fetch('https://api.weather.gov/points/' + lat.toFixed(4) + ',' + lon.toFixed(4));
+      if (picker._gridToken !== token) return;
+      if (!r.ok) { picker.grid = { status: 'outside', office: '', gridId: '', cell: '', place: '' }; updateGridStatus(); return; }
+      const j = await r.json();
+      if (picker._gridToken !== token) return;
+      const P = j.properties || {};
+      const rl = P.relativeLocation && P.relativeLocation.properties;
+      picker.grid = {
+        status: 'ok',
+        office: P.cwa || P.gridId || '',
+        gridId: P.gridId || '',
+        cell: (P.gridX != null ? P.gridX + ',' + P.gridY : ''),
+        place: rl ? rl.city + ', ' + rl.state : ''
+      };
+      updateGridStatus();
+    } catch (e) {
+      if (picker._gridToken !== token) return;
+      picker.grid = { status: 'error', office: '', gridId: '', cell: '', place: '' };
+      updateGridStatus();
+    }
+  }, 450);
+}
+
+function updateGridStatus() {
+  const el = document.getElementById('mp-grid');
+  if (!el) return;
+  const G = picker.grid;
+  const view = {
+    loading: { title: 'Resolving grid cell…', sub: 'Asking api.weather.gov for this point', bg: '#eae9e9', accent: '#7d7979', icon: 'pending' },
+    ok: { title: G.place ? 'Nearest: ' + G.place : 'Point is in NWS coverage', sub: G.office ? 'Forecast office ' + G.office + ' · grid ' + G.cell : '', bg: '#eae9e9', accent: '#3d9c57', icon: 'ok' },
+    outside: { title: 'Outside NWS coverage', sub: 'This app forecasts US locations only', bg: 'rgba(236,48,19,.10)', accent: '#ec3013', icon: 'warn' },
+    error: { title: 'Could not reach api.weather.gov', sub: 'Check the connection and nudge the map to retry', bg: 'rgba(236,48,19,.10)', accent: '#ec3013', icon: 'warn' },
+    idle: { title: 'Move the map to pick a point', sub: '', bg: '#eae9e9', accent: '#7d7979', icon: 'pending' }
+  }[G.status] || { title: '', sub: '', bg: '#eae9e9', accent: '#7d7979', icon: 'pending' };
+
+  const icons = {
+    ok: '<svg viewBox="0 0 24 24" style="width:17px;height:17px;display:block;" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,13 9,18 20,6"></polyline></svg>',
+    warn: '<svg viewBox="0 0 24 24" style="width:17px;height:17px;display:block;" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><path d="M12 3.5 1.8 20.5h20.4Z"></path><line x1="12" y1="10" x2="12" y2="14.5"></line><line x1="12" y1="17.4" x2="12" y2="17.5"></line></svg>',
+    pending: '<svg viewBox="0 0 24 24" style="width:17px;height:17px;display:block;" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="7"></circle></svg>'
+  };
+
+  el.innerHTML = `<div class="grid-status" style="background:${view.bg};border-left-color:${view.accent};">
+    <span class="grid-status__icon" style="color:${view.accent};">${icons[view.icon]}</span>
+    <div style="flex:1;min-width:0;"><div class="grid-status__title">${esc(view.title)}</div><div class="grid-status__sub">${esc(view.sub)}</div></div>
+  </div>`;
+  updateSaveBtn();
+}
+
+function updateSaveBtn() {
+  const btn = document.getElementById('mp-save');
+  if (!btn) return;
+  const canSave = !!(picker.draftName || '').trim() && picker.grid.status === 'ok';
+  btn.disabled = !canSave;
+}
+
+function saveLocation() {
+  const name = (picker.draftName || '').trim();
+  if (!name || picker.grid.status !== 'ok') return;
+  const cell = picker.grid.office ? picker.grid.office + ' ' + picker.grid.cell : '';
+  const lat = +picker.pin.lat.toFixed(4), lon = +picker.pin.lon.toFixed(4);
+
+  if (picker.editId != null) {
+    state.saved = state.saved.map(s => String(s.id) === String(picker.editId)
+      ? Object.assign({}, s, { name: name, lat: lat, lon: lon, grid: cell, temp: null, icon: null })
+      : s);
+  } else {
+    state.saved.push({ id: Date.now(), name: name, lat: lat, lon: lon, grid: cell, temp: null, icon: null, home: false });
+  }
+  if (picker.home) {
+    const targetId = picker.editId != null ? picker.editId : state.saved[state.saved.length - 1].id;
+    state.saved = state.saved.map(s => Object.assign({}, s, { home: String(s.id) === String(targetId) }));
+  }
+  persistSaved();
+
+  // Make the just-saved place active and show its forecast.
+  state.location = { lat: lat, lon: lon, name: name };
+  persistLocation();
+  teardownMap();
+  backToForecast();
+  refresh();
+}
+
+/* ============================================================================
+   Navigation + init
+   ========================================================================== */
+function showScreen(name) {
+  document.getElementById('splash-screen').hidden = name !== 'splash';
+  document.getElementById('forecast-screen').hidden = name !== 'forecast';
+  document.getElementById('location-screen').hidden = name !== 'location';
+  window.scrollTo(0, 0);
+}
+
+async function init() {
+  // Seed the saved list on first run so it isn't empty.
+  if (!state.saved.length) {
+    state.saved = [{ id: Date.now(), name: state.location.name || 'Home', lat: state.location.lat, lon: state.location.lon, grid: '', temp: null, icon: null, home: true }];
+    persistSaved();
+  }
+
+  const started = Date.now();
+  state.d = await loadForecast(state.location);
+  renderForecast();
+
+  const wait = Math.max(0, MIN_SPLASH_MS - (Date.now() - started));
+  setTimeout(() => showScreen('forecast'), wait);
+}
+
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);
 } else {
   init();
-}
-
-function init() {
-  // Initialize DOM element references
-  elements = {
-    // Loading screen
-    loadingScreen: document.getElementById('loading-screen'),
-    // Forecast screen
-    forecastScreen: document.getElementById('forecast-screen'),
-    locationName: document.getElementById('location-name'),
-    currentTemp: document.getElementById('current-temp'),
-    currentCondition: document.getElementById('current-condition'),
-    currentHiLo: document.getElementById('current-hi-lo'),
-    hourlyForecast: document.getElementById('hourly-forecast'),
-    hourlyChart: document.getElementById('hourly-chart'),
-    dailyForecast: document.getElementById('daily-forecast'),
-    detailsGrid: document.getElementById('details-grid'),
-    settingsButton: document.getElementById('settings-button'),
-    hourlyTemplate: document.getElementById('hourly-card-template'),
-    dailyTemplate: document.getElementById('daily-row-template'),
-    detailTemplate: document.getElementById('detail-tile-template'),
-    // Location screen
-    locationScreen: document.getElementById('location-screen'),
-    backButton: document.getElementById('back-button'),
-    locationSearch: document.getElementById('location-search'),
-    geolocateButton: document.getElementById('geolocate-button'),
-    map: document.getElementById('map'),
-    selectedCoords: document.getElementById('selected-coords'),
-    confirmButton: document.getElementById('confirm-location'),
-  };
-
-  setupNavigation();
-  setupLocationPicker();
-  loadForecastForLocation(state.location.lat, state.location.lon);
-}
-
-function setupNavigation() {
-  elements.settingsButton.addEventListener('click', () => {
-    showScreen('location');
-  });
-
-  elements.backButton.addEventListener('click', () => {
-    showScreen('forecast');
-  });
-}
-
-function showScreen(screenName) {
-  // Hide all screens
-  elements.loadingScreen.style.display = 'none';
-  elements.forecastScreen.style.display = 'none';
-  elements.locationScreen.style.display = 'none';
-
-  // Show requested screen
-  if (screenName === 'loading') {
-    elements.loadingScreen.style.display = 'flex';
-  } else if (screenName === 'location') {
-    elements.locationScreen.style.display = 'flex';
-    if (!map) {
-      initMap();
-    }
-  } else {
-    elements.forecastScreen.style.display = 'block';
-  }
-}
-
-function setupLocationPicker() {
-  // Geolocation button
-  elements.geolocateButton.addEventListener('click', async () => {
-    if (!navigator.geolocation) {
-      alert('Geolocation is not supported by your browser');
-      return;
-    }
-
-    elements.geolocateButton.disabled = true;
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const lat = position.coords.latitude;
-        const lon = position.coords.longitude;
-        setLocation(lat, lon);
-        map.setView([lat, lon], 10);
-        elements.geolocateButton.disabled = false;
-      },
-      (error) => {
-        console.error('Geolocation error:', error);
-        alert('Unable to get your location');
-        elements.geolocateButton.disabled = false;
-      }
-    );
-  });
-
-  // Search input with debounce
-  let searchTimeout;
-  elements.locationSearch.addEventListener('input', (e) => {
-    clearTimeout(searchTimeout);
-    const query = e.target.value.trim();
-    if (query.length < 3) return;
-
-    searchTimeout = setTimeout(() => searchLocation(query), 500);
-  });
-
-  // Confirm button
-  elements.confirmButton.addEventListener('click', () => {
-    if (selectedLocation) {
-      state.location = selectedLocation;
-      localStorage.setItem('weather_location', JSON.stringify(selectedLocation));
-      loadForecastForLocation(selectedLocation.lat, selectedLocation.lon);
-      showScreen('forecast');
-    }
-  });
-}
-
-function initMap() {
-  map = L.map('map').setView([state.location.lat, state.location.lon], 10);
-
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap contributors',
-    maxZoom: 19,
-  }).addTo(map);
-
-  // Click to select location
-  map.on('click', (e) => {
-    setLocation(e.latlng.lat, e.latlng.lng);
-  });
-
-  // Set initial location
-  setLocation(state.location.lat, state.location.lon);
-}
-
-function setLocation(lat, lon) {
-  selectedLocation = { lat, lon };
-
-  // Update marker
-  if (marker) {
-    marker.setLatLng([lat, lon]);
-  } else {
-    marker = L.marker([lat, lon]).addTo(map);
-  }
-
-  // Update UI
-  elements.selectedCoords.textContent = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
-  elements.confirmButton.disabled = false;
-}
-
-async function searchLocation(query) {
-  try {
-    const response = await fetch(
-      `https://nominatim.openstreetmap.org/search?` +
-      `q=${encodeURIComponent(query)}&` +
-      `countrycodes=us&` +
-      `format=json&` +
-      `limit=1`
-    );
-    const results = await response.json();
-
-    if (results.length > 0) {
-      const result = results[0];
-      const lat = parseFloat(result.lat);
-      const lon = parseFloat(result.lon);
-      setLocation(lat, lon);
-      map.setView([lat, lon], 10);
-    }
-  } catch (error) {
-    console.error('Search error:', error);
-  }
-}
-
-async function loadForecastForLocation(lat, lon) {
-  const url = `https://forecast.weather.gov/MapClick.php?lat=${lat}&lon=${lon}&unit=0&lg=english&FcstType=dwml`;
-
-  try {
-    // Fetch main forecast (daily, current, details)
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Forecast request failed: ${response.status}`);
-    }
-
-    const xmlText = await response.text();
-    const parser = new DOMParser();
-    const xml = parser.parseFromString(xmlText, 'text/xml');
-
-    if (xml.querySelector('parsererror')) {
-      throw new Error('Unable to parse forecast XML.');
-    }
-
-    const data = parseDwmlForecast(xml);
-
-    // Fetch hourly data
-    try {
-      const hourlyUrl = `https://forecast.weather.gov/MapClick.php?lat=${lat}&lon=${lon}&unit=0&lg=english&FcstType=digitalDWML`;
-      const hourlyResponse = await fetch(hourlyUrl);
-      if (hourlyResponse.ok) {
-        const hourlyXmlText = await hourlyResponse.text();
-        const hourlyXml = parser.parseFromString(hourlyXmlText, 'text/xml');
-        const hourlyTemps = extractHourlyTemperatures(hourlyXml);
-        if (hourlyTemps.length > 0) {
-          data.hourly = buildHourlyForecastFromTemps(hourlyTemps);
-        }
-      }
-    } catch (hourlyError) {
-      console.warn('Failed to fetch hourly data', hourlyError);
-    }
-
-    state.data = data;
-    renderForecast();
-
-    // Show loading screen for at least 3 seconds
-    const minLoadTime = 3000;
-    const loadEndTime = Date.now();
-    const loadDuration = loadEndTime - state.loadStartTime;
-    const remainingTime = Math.max(0, minLoadTime - loadDuration);
-
-    setTimeout(() => {
-      showScreen('forecast');
-    }, remainingTime);
-  } catch (error) {
-    console.error('Failed to load forecast', error);
-    showError(error);
-
-    // Show loading screen for at least 3 seconds even on error
-    const minLoadTime = 3000;
-    const loadEndTime = Date.now();
-    const loadDuration = loadEndTime - state.loadStartTime;
-    const remainingTime = Math.max(0, minLoadTime - loadDuration);
-
-    setTimeout(() => {
-      showScreen('forecast');
-    }, remainingTime);
-  }
-}
-
-function parseDwmlForecast(xml) {
-  // Try to find forecast data node (dwml format) or just use first data node (digitalDWML format)
-  let forecastNode = Array.from(xml.querySelectorAll('data')).find((node) => node.getAttribute('type') === 'forecast');
-  if (!forecastNode) {
-    forecastNode = xml.querySelector('data');
-  }
-  if (!forecastNode) {
-    throw new Error('Forecast data missing in DWML response.');
-  }
-
-  const currentNode = Array.from(xml.querySelectorAll('data')).find((node) => node.getAttribute('type') === 'current observations');
-
-  // Extract location with multiple fallback strategies
-  let location = cleanText(forecastNode.querySelector('location > area-description'));
-
-  if (!location) {
-    // Try without child selector in case XML structure differs
-    location = cleanText(forecastNode.querySelector('area-description'));
-  }
-
-  if (!location) {
-    // Fallback to coordinates if area-description is missing
-    const point = forecastNode.querySelector('location > point');
-    if (point) {
-      const lat = point.getAttribute('latitude');
-      const lon = point.getAttribute('longitude');
-      location = `${lat}, ${lon}`;
-    }
-  }
-
-  if (!location) {
-    location = 'Unknown location';
-  }
-
-  const issuedAt = cleanText(xml.querySelector('head > product > creation-date'));
-  const timeLayouts = buildTimeLayoutMap(forecastNode);
-  const parameters = forecastNode.querySelector('parameters');
-
-  if (!parameters) {
-    throw new Error('Forecast parameters missing in DWML response.');
-  }
-
-  const maxTemps = extractTemperatureSeries(parameters, 'maximum', timeLayouts);
-  const minTemps = extractTemperatureSeries(parameters, 'minimum', timeLayouts);
-  const periodForecast = buildPeriodForecast(parameters, timeLayouts);
-  const daily = buildDailyForecast(maxTemps, minTemps, periodForecast);
-  const hourly = buildHourlyForecast(periodForecast);
-  const current = parseCurrentObservations(currentNode);
-  const details = buildDetails(current, daily, periodForecast);
-
-  if (current && daily.length) {
-    const today = daily[0];
-    current.hiLo = {
-      high: today.high ?? null,
-      low: today.low ?? null,
-    };
-  }
-
-  return {
-    location,
-    issuedAt,
-    current,
-    hourly,
-    daily,
-    details,
-    periodForecast,
-  };
-}
-
-function buildTimeLayoutMap(scope) {
-  const layouts = new Map();
-
-  scope.querySelectorAll('time-layout').forEach((layout) => {
-    const key = cleanText(layout.querySelector('layout-key'));
-    if (!key) {
-      return;
-    }
-
-    const entries = Array.from(layout.querySelectorAll('start-valid-time')).map((node) => ({
-      periodName: node.getAttribute('period-name') ?? null,
-      startTime: parseTimestamp(node.textContent),
-    }));
-
-    layouts.set(key, entries);
-  });
-
-  return layouts;
-}
-
-function extractTemperatureSeries(parameters, type, layouts) {
-  const node = parameters.querySelector(`temperature[type="${type}"]`);
-  if (!node) {
-    return [];
-  }
-
-  const layoutKey = node.getAttribute('time-layout');
-  const layoutEntries = layoutKey ? layouts.get(layoutKey) ?? [] : [];
-  const values = Array.from(node.querySelectorAll('value')).map(parseMaybeNumber);
-
-  return layoutEntries.map((entry, index) => ({
-    periodName: entry.periodName ?? formatDay(entry.startTime, index),
-    startTime: entry.startTime,
-    value: values[index] ?? null,
-  }));
-}
-
-function buildPeriodForecast(parameters, layouts) {
-  const textNode = parameters.querySelector('wordedForecast');
-  const textLayoutKey = textNode?.getAttribute('time-layout');
-  const layoutEntries = textLayoutKey ? layouts.get(textLayoutKey) ?? [] : [];
-
-  const texts = textNode ? Array.from(textNode.querySelectorAll('text')).map((node) => cleanText(node) ?? '') : [];
-  const iconNode = parameters.querySelector('conditions-icon');
-  const icons = iconNode ? Array.from(iconNode.querySelectorAll('icon-link')).map((node) => cleanText(node) ?? '') : [];
-  const popNode = parameters.querySelector('probability-of-precipitation');
-  const pops = popNode ? Array.from(popNode.querySelectorAll('value')).map(parseMaybeNumber) : [];
-
-  const temperatureMap = new Map();
-  extractTemperatureSeries(parameters, 'maximum', layouts).forEach((item) => {
-    if (item.periodName) {
-      temperatureMap.set(item.periodName, item.value);
-    }
-  });
-  extractTemperatureSeries(parameters, 'minimum', layouts).forEach((item) => {
-    if (item.periodName) {
-      temperatureMap.set(item.periodName, item.value);
-    }
-  });
-
-  return layoutEntries.map((entry, index) => {
-    const periodName = entry.periodName ?? formatDay(entry.startTime, index);
-    const isNight = /night/i.test(periodName ?? '');
-    const temperature = temperatureMap.get(periodName ?? '') ?? null;
-
-    return {
-      periodName,
-      startTime: entry.startTime,
-      isNight,
-      temperature,
-      icon: icons[index] ?? null,
-      narrative: texts[index] ?? '',
-      precipitationChance: pops[index] ?? null,
-    };
-  });
-}
-
-function buildDailyForecast(maxTemps, minTemps, periodForecast) {
-  const nightLookup = new Map(minTemps.map((item) => [item.periodName ?? '', item]));
-  const periodLookup = new Map(periodForecast.map((item) => [item.periodName ?? '', item]));
-
-  return maxTemps.map((dayItem, index) => {
-    const baseName = dayItem.periodName ?? formatDay(dayItem.startTime, index);
-    const nightName = index === 0 ? 'Tonight' : `${baseName} Night`;
-    const nightItem = nightLookup.get(nightName) ?? null;
-    const dayPeriod = periodLookup.get(baseName) ?? null;
-    const nightPeriod = periodLookup.get(nightName) ?? null;
-    const label = index === 0 ? 'Today' : formatDay(dayItem.startTime, index);
-
-    return {
-      label,
-      periodName: baseName,
-      high: dayItem.value ?? null,
-      low: nightItem?.value ?? null,
-      icon: dayPeriod?.icon ?? nightPeriod?.icon ?? null,
-      summary: selectSummary(dayPeriod?.narrative, nightPeriod?.narrative),
-      precipitationChanceDay: dayPeriod?.precipitationChance ?? null,
-      precipitationChanceNight: nightPeriod?.precipitationChance ?? null,
-    };
-  });
-}
-
-function buildHourlyForecast(periodForecast) {
-  return periodForecast.slice(0, 12).map((item, index) => ({
-    label: formatHourlyLabel(item, index),
-    temperature: item.temperature,
-    icon: item.icon,
-    summary: selectSummary(item.narrative),
-    precipitationChance: item.precipitationChance,
-  }));
-}
-
-function buildHourlyForecastFromTemps(hourlyTemps) {
-  const now = new Date();
-
-  return hourlyTemps.slice(0, 24).map((item, index) => {
-    // Check if this period is current (within the hour)
-    const isCurrent = item.startTime &&
-      Math.abs(now - item.startTime) < 60 * 60 * 1000;
-
-    return {
-      label: isCurrent ? 'Now' : HOUR_FORMAT.format(item.startTime),
-      temperature: item.value,
-      icon: null,
-      summary: null,
-      precipitationChance: item.precipitationChance,
-      precipitationAmount: item.precipitationAmount,
-      windSpeed: item.windSpeed,
-      humidity: item.humidity,
-    };
-  });
-}
-
-function extractHourlyTemperatures(xml) {
-  const dataNode = xml.querySelector('data');
-  if (!dataNode) return [];
-
-  const parameters = dataNode.querySelector('parameters');
-  if (!parameters) return [];
-
-  const timeLayouts = buildTimeLayoutMap(dataNode);
-  const temps = extractTemperatureSeries(parameters, 'hourly', timeLayouts);
-
-  // Extract precipitation probabilities
-  const popNode = parameters.querySelector('probability-of-precipitation[type="floating"]');
-  const pops = popNode ? Array.from(popNode.querySelectorAll('value')).map(parseMaybeNumber) : [];
-
-  // Extract precipitation amounts (inches)
-  const qpfNode = parameters.querySelector('hourly-qpf[type="floating"]');
-  const qpfs = qpfNode ? Array.from(qpfNode.querySelectorAll('value')).map(parseMaybeNumber) : [];
-
-  // Extract wind speed (sustained, mph)
-  const windNode = parameters.querySelector('wind-speed[type="sustained"]');
-  const windSpeeds = windNode ? Array.from(windNode.querySelectorAll('value')).map(parseMaybeNumber) : [];
-
-  // Extract humidity (relative, percent)
-  const humidityNode = parameters.querySelector('humidity[type="relative"]');
-  const humidities = humidityNode ? Array.from(humidityNode.querySelectorAll('value')).map(parseMaybeNumber) : [];
-
-  // Merge all data series
-  return temps.map((temp, index) => ({
-    ...temp,
-    precipitationChance: pops[index] ?? null,
-    precipitationAmount: qpfs[index] ?? null,
-    windSpeed: windSpeeds[index] ?? null,
-    humidity: humidities[index] ?? null
-  }));
-}
-
-function parseCurrentObservations(currentNode) {
-  if (!currentNode) {
-    return null;
-  }
-
-  const layouts = buildTimeLayoutMap(currentNode);
-  const parameters = currentNode.querySelector('parameters');
-  if (!parameters) {
-    return null;
-  }
-
-  const temperatureValue = parseMaybeNumber(parameters.querySelector('temperature[type="apparent"] value'));
-  const dewPoint = parseMaybeNumber(parameters.querySelector('temperature[type="dew point"] value'));
-  const humidity = parseMaybeNumber(parameters.querySelector('humidity[type="relative"] value'));
-  const pressure = parseMaybeNumber(parameters.querySelector('pressure[type="barometer"] value'));
-  const visibility = parseMaybeNumber(parameters.querySelector('weather-conditions value visibility'));
-  const weatherSummary = parameters.querySelector('weather-conditions[weather-summary]')?.getAttribute('weather-summary') ?? 'Conditions unavailable';
-  const icon = cleanText(parameters.querySelector('conditions-icon icon-link'));
-  const windDirection = parseMaybeNumber(parameters.querySelector('direction[type="wind"] value'));
-  const windSpeedKnots = parseMaybeNumber(parameters.querySelector('wind-speed[type="sustained"] value'));
-  const windGustKnots = parseMaybeNumber(parameters.querySelector('wind-speed[type="gust"] value'));
-
-  const anyTempLayout = parameters.querySelector('temperature')?.getAttribute('time-layout');
-  const observationTime = anyTempLayout ? layouts.get(anyTempLayout)?.[0]?.startTime ?? null : null;
-
-  return {
-    temperature: temperatureValue,
-    condition: weatherSummary,
-    icon,
-    dewPoint,
-    humidity,
-    pressure,
-    visibility,
-    observationTime,
-    wind: {
-      directionDegrees: windDirection,
-      speedKnots: windSpeedKnots,
-      gustKnots: windGustKnots,
-    },
-  };
-}
-
-function buildDetails(current, daily, periodForecast) {
-  const details = [];
-  if (current?.temperature != null) {
-    details.push({ label: 'FEELS LIKE', value: formatTemperature(current.temperature) });
-  }
-  if (current?.humidity != null) {
-    details.push({ label: 'HUMIDITY', value: `${Math.round(current.humidity)}%` });
-  }
-  if (current?.dewPoint != null) {
-    details.push({ label: 'DEW POINT', value: formatTemperature(current.dewPoint) });
-  }
-  if (current?.wind) {
-    const windText = formatWind(current.wind.speedKnots, current.wind.directionDegrees, current.wind.gustKnots);
-    details.push({
-      label: 'WIND',
-      value: windText,
-      windDirection: current.wind.directionDegrees
-    });
-  }
-  if (current?.visibility != null) {
-    details.push({ label: 'VISIBILITY', value: `${Number(current.visibility).toFixed(1)} mi` });
-  }
-  if (current?.pressure != null) {
-    details.push({ label: 'PRESSURE', value: `${current.pressure.toFixed(2)} inHg` });
-  }
-
-  const nextPrecip = periodForecast.find((item) => typeof item.precipitationChance === 'number');
-  if (nextPrecip) {
-    details.push({
-      label: 'NEXT 12H PRECIP',
-      value: `${Math.round(nextPrecip.precipitationChance)}%`,
-    });
-  }
-
-  if (daily.length > 1 && daily[1].summary) {
-    details.push({ label: 'TOMORROW', value: daily[1].summary });
-  }
-
-  // Add worded forecasts for upcoming periods
-  const forecastsToShow = periodForecast.slice(0, 3);
-  forecastsToShow.forEach((period) => {
-    if (period.narrative && period.periodName) {
-      details.push({
-        label: period.periodName.toUpperCase(),
-        value: period.narrative,
-        isNarrative: true
-      });
-    }
-  });
-
-  return details;
-}
-
-function renderForecast() {
-  if (!state.data) {
-    return;
-  }
-
-  const { location, current, hourly, daily, details } = state.data;
-
-  elements.locationName.textContent = location;
-  elements.currentTemp.textContent = current?.temperature != null ? formatTemperature(current.temperature) : '--';
-  elements.currentCondition.textContent = current?.condition ?? 'No data';
-  elements.currentHiLo.textContent = current?.hiLo ? formatHiLo(current.hiLo) : '-- / --';
-
-  renderHourly(hourly);
-  renderDaily(daily);
-  renderDetails(details);
-}
-
-function drawMultiSeriesChart(canvasId, hourlyData) {
-  const canvas = document.getElementById(canvasId);
-  if (!canvas) {
-    console.error('Canvas not found:', canvasId);
-    return;
-  }
-
-  const ctx = canvas.getContext('2d');
-  const rect = canvas.getBoundingClientRect();
-
-  // If canvas has no dimensions, retry after a short delay
-  if (rect.height === 0) {
-    console.log('Canvas not yet visible, retrying...');
-    setTimeout(() => drawMultiSeriesChart(canvasId, hourlyData), 100);
-    return;
-  }
-
-  // Calculate width based on data points (72px per hour to match card width + gap)
-  const pointWidth = 72; // 60px card + 12px gap
-  const width = hourlyData.length * pointWidth;
-  const height = rect.height;
-
-  canvas.width = width * 2;
-  canvas.height = height * 2;
-  ctx.scale(2, 2);
-
-  const padding = 20;
-  const chartHeight = height - padding * 2;
-
-  ctx.clearRect(0, 0, width, height);
-
-  // Draw grid lines
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) {
-    const y = padding + chartHeight * (i / 4);
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(width, y);
-    ctx.stroke();
-  }
-
-  // Helper function to normalize values to chart range
-  function normalizeData(values, minVal, maxVal) {
-    const range = maxVal - minVal || 1;
-    return values.map(v => v != null ? ((v - minVal) / range) : null);
-  }
-
-  // Extract data series
-  const temps = hourlyData.map(d => d.temperature);
-  const precipProbs = hourlyData.map(d => d.precipitationChance);
-  const precipAmounts = hourlyData.map(d => d.precipitationAmount);
-  const windSpeeds = hourlyData.map(d => d.windSpeed);
-  const humidities = hourlyData.map(d => d.humidity);
-
-  // Find ranges for each series
-  const tempMin = Math.min(...temps.filter(v => v != null));
-  const tempMax = Math.max(...temps.filter(v => v != null));
-
-  // Normalize each series (0-1 range)
-  const tempNorm = normalizeData(temps, tempMin, tempMax);
-  const precipProbNorm = normalizeData(precipProbs, 0, 100);
-  const precipAmountNorm = normalizeData(precipAmounts, 0, Math.max(0.5, Math.max(...precipAmounts.filter(v => v != null))));
-  const windNorm = normalizeData(windSpeeds, 0, Math.max(20, Math.max(...windSpeeds.filter(v => v != null))));
-  const humidityNorm = normalizeData(humidities, 0, 100);
-
-  // Draw precipitation amount bars (blue, transparent)
-  ctx.fillStyle = 'rgba(100, 181, 255, 0.15)';
-  precipAmountNorm.forEach((norm, i) => {
-    if (norm != null && norm > 0) {
-      const x = pointWidth / 2 + i * pointWidth;
-      const barHeight = norm * chartHeight;
-      const y = height - padding - barHeight;
-      const barWidth = pointWidth * 0.6; // 60% of point width
-
-      ctx.fillRect(x - barWidth / 2, y, barWidth, barHeight);
-    }
-  });
-
-  // Helper to draw a line series
-  function drawLineSeries(normalizedData, color, lineWidth = 2) {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = lineWidth;
-    ctx.beginPath();
-
-    let started = false;
-    normalizedData.forEach((norm, i) => {
-      if (norm != null) {
-        const x = pointWidth / 2 + i * pointWidth;
-        const y = height - padding - norm * chartHeight;
-
-        if (!started) {
-          ctx.moveTo(x, y);
-          started = true;
-        } else {
-          ctx.lineTo(x, y);
-        }
-      }
-    });
-
-    ctx.stroke();
-  }
-
-  // Draw humidity (light blue line, thinner, behind)
-  drawLineSeries(humidityNorm, 'rgba(100, 200, 255, 0.6)', 1.5);
-
-  // Draw precipitation probability (blue line)
-  drawLineSeries(precipProbNorm, '#64b5ff', 2);
-
-  // Draw wind speed (yellow line)
-  drawLineSeries(windNorm, '#ffeb3b', 2);
-
-  // Draw temperature (red line, on top)
-  drawLineSeries(tempNorm, '#ef5350', 2.5);
-
-  // Draw temperature points
-  tempNorm.forEach((norm, i) => {
-    if (norm != null && i % 3 === 0) {
-      const x = pointWidth / 2 + i * pointWidth;
-      const y = height - padding - norm * chartHeight;
-
-      ctx.fillStyle = '#ef5350';
-      ctx.beginPath();
-      ctx.arc(x, y, 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  });
-}
-
-function renderHourly(hourly) {
-  elements.hourlyForecast.innerHTML = '';
-  if (!hourly.length || !elements.hourlyTemplate) {
-    console.error('Hourly data missing or template not found');
-    return;
-  }
-
-  // Draw multi-series chart
-  drawMultiSeriesChart('hourly-chart', hourly);
-
-  // Render hourly cards
-  const fragment = document.createDocumentFragment();
-
-  hourly.forEach((item) => {
-    const node = elements.hourlyTemplate.content.firstElementChild.cloneNode(true);
-
-    // Time label
-    node.querySelector('.hourly__time').textContent = item.label;
-
-    // Temperature with color
-    const tempEl = node.querySelector('.hourly__temp');
-    tempEl.textContent = item.temperature != null ? formatTemperature(item.temperature) : '--';
-    if (item.temperature != null) {
-      tempEl.style.color = getTemperatureColor(item.temperature);
-    }
-
-    // Precipitation chance
-    const precipEl = node.querySelector('.hourly__precip');
-    if (item.precipitationChance != null && item.precipitationChance > 0) {
-      precipEl.textContent = `${Math.round(item.precipitationChance)}%`;
-    }
-
-    fragment.appendChild(node);
-  });
-
-  elements.hourlyForecast.appendChild(fragment);
-
-  // Synchronize scroll between chart and hourly cards
-  syncChartScroll();
-}
-
-function syncChartScroll() {
-  const chartContainer = document.querySelector('.chart-container');
-  const hourlyContainer = elements.hourlyForecast;
-
-  if (!chartContainer || !hourlyContainer) return;
-
-  // Remove existing listeners to avoid duplicates
-  chartContainer.removeEventListener('scroll', onChartScroll);
-  hourlyContainer.removeEventListener('scroll', onHourlyScroll);
-
-  let isChartScrolling = false;
-  let isHourlyScrolling = false;
-
-  function onChartScroll() {
-    if (isHourlyScrolling) return;
-    isChartScrolling = true;
-    hourlyContainer.scrollLeft = chartContainer.scrollLeft;
-    setTimeout(() => { isChartScrolling = false; }, 100);
-  }
-
-  function onHourlyScroll() {
-    if (isChartScrolling) return;
-    isHourlyScrolling = true;
-    chartContainer.scrollLeft = hourlyContainer.scrollLeft;
-    setTimeout(() => { isHourlyScrolling = false; }, 100);
-  }
-
-  chartContainer.addEventListener('scroll', onChartScroll);
-  hourlyContainer.addEventListener('scroll', onHourlyScroll);
-}
-
-function renderDaily(daily) {
-  elements.dailyForecast.innerHTML = '';
-  if (!daily.length || !elements.dailyTemplate) {
-    return;
-  }
-
-  // Find the actual min/max across the forecast period for positioning
-  const allTemps = daily.flatMap(item => [item.high, item.low]).filter(t => t != null);
-  const forecastMin = Math.min(...allTemps);
-  const forecastMax = Math.max(...allTemps);
-  const forecastRange = forecastMax - forecastMin || 1;
-
-  const fragment = document.createDocumentFragment();
-
-  daily.forEach((item) => {
-    const row = elements.dailyTemplate.content.firstElementChild.cloneNode(true);
-    row.querySelector('.daily__day').textContent = item.label;
-    row.querySelector('.daily__temp--high').textContent = item.high != null ? formatTemperature(item.high) : '--';
-    row.querySelector('.daily__temp--low').textContent = item.low != null ? formatTemperature(item.low) : '--';
-
-    const rangeBar = row.querySelector('.daily__temp-range');
-    if (item.low != null && item.high != null) {
-      // Position based on forecast range (so bars fill the width)
-      const leftPercent = ((item.low - forecastMin) / forecastRange) * 100;
-      const rightPercent = ((item.high - forecastMin) / forecastRange) * 100;
-      const widthPercent = rightPercent - leftPercent;
-
-      rangeBar.style.left = `${leftPercent}%`;
-      rangeBar.style.width = `${Math.max(2, widthPercent)}%`;
-
-      // Colors based on absolute temperature scale
-      const lowColor = getTemperatureColor(item.low);
-      const highColor = getTemperatureColor(item.high);
-      rangeBar.style.background = `linear-gradient(to right, ${lowColor}, ${highColor})`;
-    }
-
-    fragment.appendChild(row);
-  });
-
-  elements.dailyForecast.appendChild(fragment);
-}
-
-function renderDetails(details) {
-  elements.detailsGrid.innerHTML = '';
-  if (!details.length || !elements.detailTemplate) {
-    return;
-  }
-
-  const fragment = document.createDocumentFragment();
-  details.forEach((detail) => {
-    const tile = elements.detailTemplate.content.firstElementChild.cloneNode(true);
-    tile.querySelector('.detail__label').textContent = detail.label;
-    const valueEl = tile.querySelector('.detail__value');
-
-    if (detail.windDirection != null) {
-      // Create wind arrow with direction
-      const arrow = document.createElement('span');
-      arrow.className = 'wind-arrow';
-      arrow.textContent = '↑';
-      arrow.style.display = 'inline-block';
-      arrow.style.transform = `rotate(${detail.windDirection}deg)`;
-      arrow.style.marginRight = '8px';
-
-      valueEl.innerHTML = '';
-      valueEl.appendChild(arrow);
-      valueEl.appendChild(document.createTextNode(detail.value));
-    } else {
-      valueEl.textContent = detail.value;
-    }
-
-    if (detail.isNarrative) {
-      tile.classList.add('detail--narrative');
-      valueEl.classList.add('detail__value--narrative');
-    }
-
-    fragment.appendChild(tile);
-  });
-
-  elements.detailsGrid.appendChild(fragment);
-}
-
-function showError(error) {
-  elements.locationName.textContent = 'Unable to load forecast';
-  elements.currentCondition.textContent = error.message;
-  elements.currentTemp.textContent = '--';
-  elements.currentHiLo.textContent = '-- / --';
-  elements.hourlyForecast.innerHTML = '';
-  elements.dailyForecast.innerHTML = '';
-  elements.detailsGrid.innerHTML = '';
-}
-
-function createIconElement(url, summary) {
-  if (url) {
-    const img = document.createElement('img');
-    img.src = url;
-    img.alt = summary ?? 'Weather icon';
-    img.loading = 'lazy';
-    img.width = 36;
-    img.height = 36;
-    img.className = 'icon-image';
-    return img;
-  }
-
-  const placeholder = document.createElement('div');
-  placeholder.className = 'icon-placeholder';
-  return placeholder;
-}
-
-function formatTemperature(value) {
-  if (value == null || Number.isNaN(Number(value))) {
-    return '--';
-  }
-  return `${Math.round(Number(value))}°`;
-}
-
-function formatHiLo(hiLo) {
-  const high = hiLo.high != null ? formatTemperature(hiLo.high) : '--';
-  const low = hiLo.low != null ? formatTemperature(hiLo.low) : '--';
-  return `${high} / ${low}`;
-}
-
-function formatHourlyLabel(item, index) {
-  if (!item.startTime) {
-    return item.periodName ?? `+${index * 12}h`;
-  }
-
-  const now = Date.now();
-  const timeMs = item.startTime.getTime();
-  if (index === 0 && Math.abs(timeMs - now) < 60 * 60 * 1000) {
-    return 'Now';
-  }
-
-  return HOUR_FORMAT.format(item.startTime);
-}
-
-function formatDay(date, index) {
-  if (!date) {
-    return index === 0 ? 'Today' : `Day ${index + 1}`;
-  }
-
-  return DAY_FORMAT.format(date);
-}
-
-function parseTimestamp(value) {
-  if (!value) {
-    return null;
-  }
-  const date = new Date(value.trim());
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function parseMaybeNumber(node) {
-  if (!node) {
-    return null;
-  }
-
-  const value = typeof node === 'string' ? node : node.textContent;
-  if (!value) {
-    return null;
-  }
-
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.toLowerCase() === 'na') {
-    return null;
-  }
-
-  const number = Number(trimmed);
-  return Number.isNaN(number) ? null : number;
-}
-
-function cleanText(node) {
-  if (!node) {
-    return null;
-  }
-  const value = typeof node === 'string' ? node : node.textContent;
-  return value ? value.trim() : null;
-}
-
-function selectSummary(...summaries) {
-  for (const text of summaries) {
-    if (!text) {
-      continue;
-    }
-    const trimmed = text.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const sentenceMatch = trimmed.match(/^[^.!?]+[.!?]?/);
-    const firstSentence = sentenceMatch ? sentenceMatch[0] : trimmed;
-    return firstSentence.replace(/\s+/g, ' ');
-  }
-  return '';
-}
-
-function formatWind(speedKnots, directionDegrees, gustKnots) {
-  const speedMph = knotsToMph(speedKnots);
-  const gustMph = knotsToMph(gustKnots);
-  const compass = directionDegrees != null ? degreesToCompass(directionDegrees) : null;
-
-  if (!speedMph && !gustMph) {
-    return 'Calm';
-  }
-
-  const parts = [];
-  if (directionDegrees != null) {
-    // Add arrow pointing in wind direction
-    parts.push(`↑ ${compass || ''}`);
-  } else if (compass) {
-    parts.push(compass);
-  }
-  if (speedMph) {
-    parts.push(`${Math.round(speedMph)} mph`);
-  }
-  if (gustMph) {
-    parts.push(`gusts ${Math.round(gustMph)}`);
-  }
-
-  return parts.join(' ');
-}
-
-function knotsToMph(knots) {
-  if (knots == null) {
-    return null;
-  }
-  return knots * 1.15078;
-}
-
-function degreesToCompass(degrees) {
-  if (degrees == null) {
-    return null;
-  }
-  const directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
-  const index = Math.round(((degrees % 360) / 22.5)) % directions.length;
-  return directions[index];
-}
-
-function getTemperatureColor(temp) {
-  if (temp == null) return 'rgba(128, 128, 128, 0.5)';
-
-  // Normalize temperature to 0-1 range
-  const normalized = Math.max(0, Math.min(1, (temp - TEMP_MIN) / (TEMP_MAX - TEMP_MIN)));
-
-  // Color stops: white -> purple -> blue -> green -> yellow -> red -> burgundy
-  const stops = [
-    { pos: 0.00, color: [255, 255, 255] },  // -20F white
-    { pos: 0.14, color: [147, 112, 219] },  // 0F purple
-    { pos: 0.29, color: [100, 181, 246] },  // 20F blue
-    { pos: 0.43, color: [102, 187, 106] },  // 40F green
-    { pos: 0.57, color: [255, 235, 59] },   // 60F yellow
-    { pos: 0.71, color: [239, 83, 80] },    // 80F red
-    { pos: 1.00, color: [136, 14, 79] }     // 120F burgundy
-  ];
-
-  // Find the two stops to interpolate between
-  let lower = stops[0];
-  let upper = stops[stops.length - 1];
-
-  for (let i = 0; i < stops.length - 1; i++) {
-    if (normalized >= stops[i].pos && normalized <= stops[i + 1].pos) {
-      lower = stops[i];
-      upper = stops[i + 1];
-      break;
-    }
-  }
-
-  // Interpolate between the two colors
-  const range = upper.pos - lower.pos;
-  const rangePct = range === 0 ? 0 : (normalized - lower.pos) / range;
-
-  const r = Math.round(lower.color[0] + (upper.color[0] - lower.color[0]) * rangePct);
-  const g = Math.round(lower.color[1] + (upper.color[1] - lower.color[1]) * rangePct);
-  const b = Math.round(lower.color[2] + (upper.color[2] - lower.color[2]) * rangePct);
-
-  return `rgb(${r}, ${g}, ${b})`;
 }
