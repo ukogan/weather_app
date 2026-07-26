@@ -191,6 +191,7 @@ a:hover { color: var(--color-accent); }
   line-height: 1;
   margin-top: 5px;
 }
+.fc-header__actions { display: flex; gap: 8px; flex: none; }
 
 .fc-alert {
   display: flex;
@@ -332,6 +333,7 @@ a:hover { color: var(--color-accent); }
 .search__input { flex: 1; border: none; outline: none; background: transparent; font-family: inherit; font-size: 15px; font-weight: 500; color: var(--color-text); padding: 10px 10px 10px 0; min-width: 0; }
 .search__input::placeholder { color: var(--color-muted-3); }
 .search__clear { border: none; background: transparent; cursor: pointer; color: var(--color-muted-2); width: 36px; height: 38px; display: grid; place-items: center; flex: none; }
+.search__clear[hidden] { display: none; }
 
 .results-head { font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-muted-2); padding-bottom: 7px; border-bottom: 2px solid var(--color-divider); }
 .result-row { width: 100%; text-align: left; font-family: inherit; background: transparent; border: none; border-bottom: 1px solid var(--color-rule); cursor: pointer; padding: 11px 0; display: flex; align-items: center; gap: 11px; }
@@ -362,7 +364,13 @@ a:hover { color: var(--color-accent); }
 .use-current { width: 100%; text-align: left; font-family: inherit; background: transparent; border: none; border-bottom: 1px solid var(--color-rule); cursor: pointer; padding: 13px 0; display: flex; align-items: center; gap: 11px; }
 .use-current__icon { flex: none; color: var(--color-accent); display: grid; place-items: center; }
 .use-current__label { flex: 1; font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
-.use-current__note { flex: none; font-size: 11px; font-weight: 600; color: var(--color-muted-2); letter-spacing: 0.04em; text-transform: uppercase; }
+.use-current__note { flex: none; font-size: 11px; font-weight: 600; color: var(--color-muted-2); letter-spacing: 0.04em; text-transform: uppercase; display: flex; align-items: center; }
+
+/* Primary "open the map" affordance — visible without searching first. */
+.map-entry { margin-top: 16px; border: 1px solid var(--color-divider); border-bottom: 1px solid var(--color-divider); padding: 13px 12px; }
+.map-entry:hover { background: rgba(32, 30, 29, 0.05); }
+.map-entry .use-current__label { font-weight: 800; }
+.map-entry .use-current__note { color: var(--color-muted-2); }
 
 /* map view */
 .picker__map-view { display: flex; flex-direction: column; min-height: 100vh; }
