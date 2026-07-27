@@ -453,3 +453,68 @@ a:hover { color: var(--color-accent); }
   .fc-disc .disc-head { break-after: avoid; }
   .fc-disc .disc-body { break-inside: avoid-column; }
 }
+
+/* ============================================================================
+   DELIGHT LAYER
+   Self-contained. Each moment is toggled by a flag in the DELIGHT object at the
+   top of app.js — set one to false to remove it. This CSS is inert unless the
+   JS adds the class / element. All motion is gated on prefers-reduced-motion.
+   ---------------------------------------------------------------------------- */
+
+/* D1 — splash lifts away, forecast rises in */
+.splash--leaving { animation: dl-splash-out 0.55s cubic-bezier(0.4, 0, 0.2, 1) forwards; }
+@keyframes dl-splash-out { to { opacity: 0; transform: translateY(-16px); } }
+.forecast--enter .forecast__inner { animation: dl-rise 0.55s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes dl-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+
+/* D5 — forecast <-> locations cross-fade (replaces the instant hidden toggle) */
+.screen--enter { animation: dl-screen-in 0.34s ease both; }
+@keyframes dl-screen-in { from { opacity: 0; transform: scale(0.99); } to { opacity: 1; transform: none; } }
+
+/* D6 — button press physics */
+.icon-btn, .zoom__btn, .chip, .btn-save, .btn-cancel,
+.result-row, .use-current, .map-entry, .saved-row__main, .disc-toggle {
+  transition: transform 0.16s cubic-bezier(0.25, 1, 0.5, 1),
+              background-color 0.14s ease, color 0.14s ease, filter 0.14s ease;
+}
+.icon-btn:hover { transform: translateY(-1px); }
+.icon-btn:active { transform: translateY(1px); transition-duration: 0.05s; }
+.chip:active, .zoom__btn:active { transform: scale(0.95); }
+.btn-save:hover:not(:disabled) { filter: brightness(1.05); }
+.btn-save:active:not(:disabled) { transform: translateY(2px); }
+.btn-cancel:active { transform: translateY(2px); }
+.result-row:active, .use-current:active, .map-entry:active { transform: translateX(2px); }
+
+/* D7 — time-of-day tint: JS sets --color-bg / --color-surface on :root; these
+   transition the grounds. The red accent deliberately never shifts. */
+body, .forecast, .picker { transition: background-color 0.6s ease; }
+
+/* D11 — "it's actually raining" nod: a faint precip drift over the column */
+.forecast { position: relative; }
+.wx-rain {
+  position: absolute; inset: 0; pointer-events: none; z-index: 3; opacity: 0.07;
+  background-image: repeating-linear-gradient(74deg, transparent 0 8px, var(--c-precip) 8px 9px);
+  background-size: 110px 110px;
+  animation: dl-rain 1.05s linear infinite;
+}
+@keyframes dl-rain { to { background-position: -36px 110px; } }
+
+/* D12 — konami rainbow reveal */
+.egg { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column;
+       justify-content: flex-end; opacity: 0; pointer-events: none; }
+.egg.on { opacity: 1; pointer-events: auto; animation: dl-egg-in 0.5s ease forwards; }
+.egg__img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.egg__cap { position: relative; background: var(--color-bg); border-top: 2px solid var(--color-text);
+            padding: 18px 22px; }
+.egg__cap-title { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; }
+.egg__cap-sub { font-size: 12px; font-weight: 500; color: var(--color-muted-1); margin-top: 4px; }
+@keyframes dl-egg-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* Respect reduced motion: kill decorative motion, keep the static end states. */
+@media (prefers-reduced-motion: reduce) {
+  .splash--leaving, .forecast--enter .forecast__inner, .screen--enter { animation: none !important; }
+  .wx-rain { animation: none !important; opacity: 0.05; }
+  .icon-btn:hover, .icon-btn:active, .chip:active, .zoom__btn:active,
+  .btn-save:active, .btn-cancel:active, .result-row:active,
+  .use-current:active, .map-entry:active { transform: none !important; }
+}

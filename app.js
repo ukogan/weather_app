@@ -727,7 +727,7 @@ function renderForecast() {
   const discMeta = discLive ? esc(d.discussion.office) + ' · issued ' + esc(d.discussion.issued) : 'Sample text — live discussion unavailable';
   const discToggle = secs.length > 1 ? `<button class="disc-toggle" id="disc-toggle" type="button">${state.expanded ? 'Show less' : 'Read full discussion'}</button>` : '';
 
-  scr.innerHTML = `<div class="forecast__inner">
+  scr.innerHTML = `${Delight.rainMarkup(d)}<div class="forecast__inner">
     <div class="fc-identity">
     <header class="fc-header">
       <button id="fc-open-picker" type="button" title="Change location" style="background:transparent;border:none;padding:0;text-align:left;cursor:pointer;color:inherit;font:inherit;">
@@ -795,6 +795,7 @@ function renderForecast() {
   scr.querySelectorAll('.zoom__btn').forEach(b => b.addEventListener('click', () => { state.zoom = +b.dataset.zoom; renderForecast(); }));
   scr.querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => toggleSeries(b.dataset.series)));
   fitChart();
+  Delight.applyTint(d); // D7 time-of-day ground tint
 }
 
 function toggleSeries(k) {
@@ -907,7 +908,7 @@ function renderResults(list) {
   if (!list.length) {
     results.innerHTML = `<div style="margin-top:18px;">
       <div class="results-head">No matches</div>
-      <div class="empty-note">No match. Drop a pin on the map instead — that is the only way to get an exact grid point.</div>
+      <div class="empty-note">Nothing by that name. Drop a pin on the map instead — it's the only way to an exact NWS grid point.</div>
       <button class="btn-save" id="pk-openmap" type="button" style="flex:none;width:100%;">Open map</button>
     </div>`;
     document.getElementById('pk-openmap').addEventListener('click', () => openMapNew());
@@ -1159,7 +1160,7 @@ function updateGridStatus() {
     loading: { title: 'Resolving grid cell…', sub: 'Asking api.weather.gov for this point', bg: '#eae9e9', accent: '#7d7979', icon: 'pending' },
     ok: { title: G.place ? 'Nearest: ' + G.place : 'Point is in NWS coverage', sub: G.office ? 'Forecast office ' + G.office + ' · grid ' + G.cell : '', bg: '#eae9e9', accent: '#3d9c57', icon: 'ok' },
     outside: { title: 'Outside NWS coverage', sub: 'This app forecasts US locations only', bg: 'rgba(236,48,19,.10)', accent: '#ec3013', icon: 'warn' },
-    error: { title: 'Could not reach api.weather.gov', sub: 'Check the connection and nudge the map to retry', bg: 'rgba(236,48,19,.10)', accent: '#ec3013', icon: 'warn' },
+    error: { title: 'Can’t reach the weather service', sub: 'Check your connection, then nudge the map to try this spot again', bg: 'rgba(236,48,19,.10)', accent: '#ec3013', icon: 'warn' },
     idle: { title: 'Move the map to pick a point', sub: '', bg: '#eae9e9', accent: '#7d7979', icon: 'pending' }
   }[G.status] || { title: '', sub: '', bg: '#eae9e9', accent: '#7d7979', icon: 'pending' };
 
@@ -1213,12 +1214,194 @@ function saveLocation() {
 /* ============================================================================
    Navigation + init
    ========================================================================== */
+/* ============================================================================
+   DELIGHT LAYER
+   Twelve small moments of polish. Flip any flag below to false to remove that
+   moment cleanly — the hooks elsewhere all no-op when their flag is off. All
+   motion also self-disables under prefers-reduced-motion. Paired CSS lives in
+   the "DELIGHT LAYER" section of styles.css.
+   ========================================================================== */
+const DELIGHT = {
+  splashReveal: true,     // D1  splash lifts away, forecast rises in
+  tempCountUp: true,      // D2  the big temperature ticks up to its reading
+  chartDraw: true,        // D3  hourly temp line strokes on left-to-right
+  dayBars: true,          // D4  7-day range bars grow in, staggered
+  screenFade: true,       // D5  forecast <-> locations cross-fade
+  buttonPhysics: true,    // D6  hover-lift / press-travel (CSS-only; see styles.css)
+  todTint: true,          // D7  ground tints subtly warm at dawn/dusk, cool at night
+  rotatingStatus: true,   // D8  splash status cycles through the real load steps
+  consoleSignature: true, // D9  a privacy note for anyone who opens devtools
+  rainNod: true,          // D11 faint rain drift when it's actually precipitating
+  konami: true            // D12 the arrow-keys sequence brings back the rainbow
+};
+
+const Delight = {
+  reduce() {
+    return typeof window !== 'undefined' && window.matchMedia
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  },
+
+  /* D1 — splash -> forecast. Called from init instead of a bare showScreen. */
+  splashToForecast() {
+    const splash = document.getElementById('splash-screen');
+    const fc = document.getElementById('forecast-screen');
+    fc.hidden = false;
+    window.scrollTo(0, 0);
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(fitChart);
+    if (DELIGHT.splashReveal && !this.reduce()) fc.classList.add('forecast--enter');
+    this.revealForecast();
+    if (!DELIGHT.splashReveal || this.reduce()) { splash.hidden = true; return; }
+    splash.classList.add('splash--leaving');
+    const done = () => { splash.hidden = true; splash.classList.remove('splash--leaving'); };
+    splash.addEventListener('animationend', done, { once: true });
+    setTimeout(done, 700); // fallback if animationend never fires
+  },
+
+  /* D2/D3/D4 — one-time entrance animations, run after the reveal paints. */
+  revealForecast() {
+    const run = () => { this.countUp(); this.drawChart(); this.growBars(); };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => requestAnimationFrame(run));
+    else run();
+  },
+  countUp() {
+    const el = document.querySelector('#forecast-screen .fc-temp');
+    if (!el) return;
+    const target = state.d && state.d.cur ? state.d.cur.temp : null;
+    if (target == null) return;
+    if (!DELIGHT.tempCountUp || this.reduce()) { el.textContent = target + '°'; return; }
+    const dur = 850; let start = null;
+    const step = (ts) => {
+      if (!start) start = ts;
+      const p = Math.min(1, (ts - start) / dur);
+      const e = 1 - Math.pow(1 - p, 3);
+      const v = Math.round(e * target);
+      el.textContent = v + '°'; el.style.color = tempInk(v);
+      if (p < 1) requestAnimationFrame(step); else el.style.color = tempInk(target);
+    };
+    el.textContent = '0°'; requestAnimationFrame(step);
+  },
+  drawChart() {
+    if (!DELIGHT.chartDraw || this.reduce()) return;
+    const line = document.querySelector('#fc-chart-scroll polyline[stroke-width="3"]');
+    if (!line || !line.getTotalLength) return;
+    const len = line.getTotalLength();
+    line.style.transition = 'none';
+    line.style.strokeDasharray = len;
+    line.style.strokeDashoffset = len;
+    requestAnimationFrame(() => {
+      line.style.transition = 'stroke-dashoffset 0.9s cubic-bezier(0.4, 0, 0.2, 1)';
+      line.style.strokeDashoffset = '0';
+    });
+  },
+  growBars() {
+    if (!DELIGHT.dayBars || this.reduce()) return;
+    const fills = document.querySelectorAll('#forecast-screen .day-row__fill');
+    fills.forEach((f, i) => {
+      const w = f.style.width;
+      f.style.transition = 'none';
+      f.style.width = '0';
+      requestAnimationFrame(() => {
+        f.style.transition = 'width 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) ' + (i * 0.05) + 's';
+        f.style.width = w;
+      });
+    });
+  },
+
+  /* D5 — cross-fade whichever screen just became visible (via showScreen). */
+  enter(name) {
+    if (!DELIGHT.screenFade || this.reduce()) return;
+    if (name !== 'forecast' && name !== 'location') return;
+    const el = document.getElementById(name === 'forecast' ? 'forecast-screen' : 'location-screen');
+    if (!el) return;
+    el.classList.remove('screen--enter');
+    void el.offsetWidth; // restart the animation
+    el.classList.add('screen--enter');
+    el.addEventListener('animationend', () => el.classList.remove('screen--enter'), { once: true });
+  },
+
+  /* D7 — subtle time-of-day tint on the two grounds; the accent never moves. */
+  applyTint(d) {
+    const root = document.documentElement.style;
+    if (!DELIGHT.todTint) { root.removeProperty('--color-bg'); root.removeProperty('--color-surface'); return; }
+    let phase = 'day';
+    const s = d && d.sun;
+    if (s && s.riseH != null && s.setH != null) {
+      const now = new Date();
+      const h = now.getHours() + now.getMinutes() / 60;
+      if (h < s.riseH - 0.5 || h >= s.setH + 0.5) phase = 'night';
+      else if (h < s.riseH + 1.2) phase = 'dawn';
+      else if (h >= s.setH - 1.2) phase = 'dusk';
+    }
+    const map = { day: null, dawn: ['#f5f1ec', '#ece7e1'], dusk: ['#f3eeec', '#eae3df'], night: ['#eceaec', '#e3e1e4'] };
+    const t = map[phase];
+    if (t) { root.setProperty('--color-bg', t[0]); root.setProperty('--color-surface', t[1]); }
+    else { root.removeProperty('--color-bg'); root.removeProperty('--color-surface'); }
+  },
+
+  /* D8 — rotate the splash status through the actual load sequence. */
+  startStatus() {
+    if (!DELIGHT.rotatingStatus) return;
+    const el = document.getElementById('splash-status');
+    if (!el) return;
+    const lines = ['Contacting api.weather.gov', 'Resolving your grid cell', 'Reading the hourly forecast', 'Reading the sky'];
+    let i = 0; el.textContent = lines[0];
+    this._statusT = setInterval(() => { i = (i + 1) % lines.length; el.textContent = lines[i]; }, 1100);
+  },
+  stopStatus() { clearInterval(this._statusT); },
+
+  /* D9 — a note where a tracker would sit. */
+  consoleSignature() {
+    if (!DELIGHT.consoleSignature) return;
+    try {
+      console.log('%cWeather with Privacy', 'color:#ec3013;font:800 20px Archivo,system-ui,sans-serif');
+      console.log('%cNo account. No tracking. No location leaving this device.\nSource: api.weather.gov (NWS) + Open-Meteo.',
+        'color:#605d5d;font:500 12px Archivo,system-ui,sans-serif');
+    } catch (e) { /* console unavailable */ }
+  },
+
+  /* D11 — markup for the rain nod; only when the current condition is rain. */
+  rainMarkup(d) {
+    if (!DELIGHT.rainNod) return '';
+    if (!d || !d.cur || d.cur.icon !== 'rain') return '';
+    return '<div class="wx-rain" aria-hidden="true"></div>';
+  },
+
+  /* D12 — the classic sequence brings back the app's one splash of colour. */
+  initKonami() {
+    if (!DELIGHT.konami || this._konamiInit) return;
+    this._konamiInit = true;
+    const seq = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'b', 'a'];
+    let pos = 0;
+    window.addEventListener('keydown', (e) => {
+      const k = e.key && e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      if (k === seq[pos]) { pos++; if (pos === seq.length) { pos = 0; this.showEgg(); } }
+      else { pos = (k === seq[0]) ? 1 : 0; }
+    });
+  },
+  showEgg() {
+    let egg = document.getElementById('wx-egg');
+    if (!egg) {
+      egg = document.createElement('div');
+      egg.id = 'wx-egg'; egg.className = 'egg';
+      egg.innerHTML = '<img class="egg__img" src="rainbow.png" alt="Rainbow over Emerald Hills" />'
+        + '<div class="egg__cap"><div class="egg__cap-title">Weather with Privacy</div>'
+        + '<div class="egg__cap-sub">You found the one splash of colour. Tap to dismiss.</div></div>';
+      egg.addEventListener('click', () => egg.classList.remove('on'));
+      document.body.appendChild(egg);
+    }
+    egg.classList.add('on');
+    clearTimeout(this._eggT);
+    this._eggT = setTimeout(() => egg.classList.remove('on'), 4000);
+  }
+};
+
 function showScreen(name) {
   document.getElementById('splash-screen').hidden = name !== 'splash';
   document.getElementById('forecast-screen').hidden = name !== 'forecast';
   document.getElementById('location-screen').hidden = name !== 'location';
   window.scrollTo(0, 0);
   if (name === 'forecast' && typeof requestAnimationFrame === 'function') requestAnimationFrame(fitChart);
+  Delight.enter(name); // D5 cross-fade
 }
 
 let _resizeT = null;
@@ -1228,6 +1411,10 @@ window.addEventListener('resize', () => {
 });
 
 async function init() {
+  Delight.consoleSignature(); // D9
+  Delight.initKonami();       // D12
+  Delight.startStatus();      // D8
+
   // Seed the saved list on first run so it isn't empty.
   if (!state.saved.length) {
     state.saved = [{ id: Date.now(), name: state.location.name || 'Home', lat: state.location.lat, lon: state.location.lon, grid: '', temp: null, icon: null, home: true }];
@@ -1239,7 +1426,7 @@ async function init() {
   renderForecast();
 
   const wait = Math.max(0, MIN_SPLASH_MS - (Date.now() - started));
-  setTimeout(() => showScreen('forecast'), wait);
+  setTimeout(() => { Delight.stopStatus(); Delight.splashToForecast(); }, wait); // D1
 }
 
 if (document.readyState === 'loading') {
