@@ -1231,7 +1231,7 @@ const DELIGHT = {
   todTint: true,          // D7  ground tints subtly warm at dawn/dusk, cool at night
   rotatingStatus: true,   // D8  splash status cycles through the real load steps
   consoleSignature: true, // D9  a privacy note for anyone who opens devtools
-  rainNod: true,          // D11 faint rain drift when it's actually precipitating
+  rainNod: false,         // D11 faint rain drift when it's actually precipitating
   konami: true            // D12 the arrow-keys sequence brings back the rainbow
 };
 
